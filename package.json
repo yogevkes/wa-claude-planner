@@ -1,0 +1,25 @@
+{
+  "name": "wa-claude-planner",
+  "version": "1.0.0",
+  "description": "WhatsApp self-group -> Claude -> Google Calendar planner (Windows-friendly)",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "google-auth": "node scripts/google-auth.js",
+    "list-groups": "node src/index.js --list-chats",
+    "list-chats": "node src/index.js --list-chats",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "baileys": "7.0.0-rc14",
+    "googleapis": "^190.0.0",
+    "node-cron": "^4.6.0",
+    "pino": "^10.4.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "license": "MIT"
+}

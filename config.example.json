@@ -1,0 +1,40 @@
+{
+  "groupName": "קבוצה שלי עם עצמי",
+  "groupJid": "",
+  "onlyFromMe": true,
+  "botPrefix": "🤖",
+
+  "timezone": "Asia/Jerusalem",
+  "calendarId": "primary",
+  "calendarLookbackDays": 1,
+  "calendarLookaheadDays": 21,
+  "protectNonBotEvents": false,
+  "defaultReminderMinutes": 30,
+
+  "claudePath": "claude",
+  "claudeModel": "sonnet",
+  "claudeTimeoutSec": 360,
+
+  "debounceSec": 15,
+  "catchUpMaxHours": 72,
+  "historyMessages": 30,
+
+  "morningBrief": "30 7 * * *",
+  "eveningBrief": "30 21 * * *",
+  "lateMorningBriefUntilHour": 12,
+
+  "watchChats": [
+    "אמא",
+    "המשפחה- קבוצה",
+    { "name": "בן/בת הזוג", "phone": "972500000000" }
+  ],
+  "scanCron": "0 * * * *",
+  "scanQuietHours": [23, 7],
+  "scanContextMessages": 10,
+  "scanDownloadMedia": true,
+  "scanMaxFiles": 12,
+
+  "pairingPhone": "",
+
+  "userContext": "כתוב כאן בכמה שורות דברים שיעזרו ל-Claude לתכנן: שעות עבודה, זמני נסיעה קבועים, הרגלים, מה חשוב לך שיזכיר לך וכו'."
+}
