@@ -14,6 +14,7 @@
   "claudePath": "claude",
   "claudeModel": "sonnet",
   "claudeTimeoutSec": 360,
+  "claudeConfigDir": "",
 
   "debounceSec": 15,
   "catchUpMaxHours": 72,

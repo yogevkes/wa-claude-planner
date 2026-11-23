@@ -1,6 +1,9 @@
 @echo off
-rem Visible run: use this the first time (to scan the WhatsApp QR) and for debugging.
+rem Visible run (first WhatsApp link, debugging).  Usage: start.bat [instance]
 chcp 65001 >nul
 cd /d "%~dp0.."
-node src\index.js
+set "INST=%~1"
+if "%INST%"=="" set "INST=default"
+title WA-Claude Planner - %INST%
+node src\index.js --instance %INST%
 pause

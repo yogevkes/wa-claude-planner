@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import pino from 'pino';
 import cron from 'node-cron';
-import { loadConfig, paths } from './config.js';
+import { loadConfig, paths, INSTANCE } from './config.js';
 import { State } from './state.js';
 import { Calendar, getAuthorizedClient } from './calendar.js';
 import { askClaude, runClaudeCli } from './claude.js';
@@ -106,5 +106,5 @@ if (!listGroups) {
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
-  log.info('wa-claude planner started');
+  log.info(`wa-claude planner started (instance: ${INSTANCE})`);
 }

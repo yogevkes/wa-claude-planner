@@ -3,9 +3,11 @@ import fs from 'node:fs';
 import http from 'node:http';
 import { exec } from 'node:child_process';
 import { google } from 'googleapis';
-import { paths } from '../src/config.js';
+import { paths, loadConfig, INSTANCE } from '../src/config.js';
 import { loadOAuthClient, SCOPES } from '../src/calendar.js';
 
+loadConfig(); // creates the instance config and copies the shared OAuth client if needed
+console.log(`Instance: ${INSTANCE}`);
 const client = loadOAuthClient();
 const server = http.createServer();
 

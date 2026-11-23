@@ -24,7 +24,8 @@ export function runClaudeCli(prompt, cfg, { log } = {}) {
       cwd: paths.work,
       shell: isWin, // needed for claude.cmd (npm install) on Windows
       windowsHide: true,
-      env: process.env,
+      // claudeConfigDir lets each instance use its own Claude login / subscription
+      env: cfg.claudeConfigDir ? { ...process.env, CLAUDE_CONFIG_DIR: cfg.claudeConfigDir } : process.env,
     });
     let out = '';
     let err = '';

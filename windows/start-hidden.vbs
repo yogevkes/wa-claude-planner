@@ -1,4 +1,6 @@
-' Starts run-forever.cmd with no console window
+' Starts run-forever.cmd with no console window.  Optional argument: instance name
 Set fso = CreateObject("Scripting.FileSystemObject")
 here = fso.GetParentFolderName(WScript.ScriptFullName)
-CreateObject("WScript.Shell").Run """" & here & "\run-forever.cmd""", 0, False
+inst = "default"
+If WScript.Arguments.Count > 0 Then inst = WScript.Arguments(0)
+CreateObject("WScript.Shell").Run """" & here & "\run-forever.cmd"" " & inst, 0, False
