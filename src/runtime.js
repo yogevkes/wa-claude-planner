@@ -129,7 +129,15 @@ export class Planner extends EventEmitter {
       this.calendar = null;
       this.google = { state: e.code || (/invalid_grant|unauthori[sz]ed|401/i.test(e.message) ? 'not_authorized' : 'error'), error: e.message };
       this.log.error(`Google Calendar: ${e.message}`);
+      // A network problem (e.g. no internet right after boot) fixes itself: try again with backoff.
+      // Missing client / authorization needs the user, so no retry for those.
+      if (this.google.state === 'error' && !this.stopped) {
+        this.googleRetry = Math.min((this.googleRetry || 30) * 2, 600);
+        clearTimeout(this.googleTimer);
+        this.googleTimer = setTimeout(() => this.initCalendar(), this.googleRetry * 1000);
+      }
     }
+    if (this.google.state === 'ok') this.googleRetry = 0;
     this.emit('change', { google: this.google.state });
     return this.google;
   }
@@ -178,9 +186,28 @@ export class Planner extends EventEmitter {
       log: this.log,
       inbox: this.inbox,
       send: (text) => this.wa.send(text),
-      ask: (prompt) => askClaude(prompt, this.cfg, this.deps.runClaude, this.log),
+      ask: (prompt) => askClaude(prompt, this.cfg, (p, c, o) => this.trackedClaude(p, c, o), this.log),
     });
     this.drainQueue();
+  }
+
+  /** Real Claude calls also keep the Claude status current (so a failed startup check heals itself) */
+  async trackedClaude(prompt, cfg, opts) {
+    try {
+      const out = await this.deps.runClaude(prompt, cfg, opts);
+      if (this.claude.state !== 'ok') {
+        this.claude = { ...this.claude, state: 'ok', error: null, checkedAt: Date.now() };
+        this.emit('change', { claude: 'ok' });
+      }
+      return out;
+    } catch (e) {
+      const kind = classifyClaudeError(e.message);
+      if (kind !== 'error' && this.claude.state !== kind) {
+        this.claude = { ...this.claude, state: kind, error: e.message.slice(0, 400), checkedAt: Date.now() };
+        this.emit('change', { claude: kind });
+      }
+      throw e;
+    }
   }
 
   onWhatsAppMessage(m) {
@@ -295,6 +322,11 @@ export class Planner extends EventEmitter {
       this.claude = { state: 'ok', error: null, checkedAt: Date.now(), busy: false, reply: String(out).slice(0, 40) };
     } catch (e) {
       this.claude = { state: classifyClaudeError(e.message), error: e.message.slice(0, 400), checkedAt: Date.now(), busy: false };
+      // e.g. a timeout while offline: check again later (not-installed / not-logged-in wait for the user)
+      if (this.claude.state === 'error' && !this.stopped) {
+        clearTimeout(this.claudeTimer);
+        this.claudeTimer = setTimeout(() => this.checkClaude().catch(() => {}), 5 * 60000);
+      }
     }
     this.emit('change', { claude: this.claude.state });
     return this.claude;
@@ -329,19 +361,38 @@ export class Planner extends EventEmitter {
     spawn('cmd.exe', ['/c', 'start', 'Claude Code login', 'cmd', '/k', this.claudeExe()], { env, detached: true, stdio: 'ignore' }).unref();
   }
 
+  /**
+   * Register the Task Scheduler task that starts the app at boot, even when nobody signs in
+   * (survives Windows Update restarts). The script asks for admin approval itself (UAC).
+   */
+  installBootTask() {
+    if (process.platform !== 'win32') throw new Error('only available on Windows');
+    const script = path.join(ROOT, 'windows', 'install-autostart.ps1');
+    spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Mode', 'Startup', '-Instance', INSTANCE], {
+      detached: true,
+      stdio: 'ignore',
+    }).unref();
+  }
+
   // ---------------- import an older installation ----------------
   /**
    * Copy config.json + data\ (WhatsApp link, Google token, tasks, history) from a folder of a
    * previous installation (e.g. D:\claude\wa-claude). The caller restarts the process afterwards.
    */
-  importFrom(dir) {
+  /** Validate an import folder before anything is stopped; returns the resolved path */
+  checkImportSource(dir) {
     const src = path.resolve(String(dir || '').trim().replace(/^"|"$/g, ''));
-    const srcData = path.join(src, 'data');
-    if (!fs.existsSync(path.join(src, 'config.json')) || !fs.existsSync(srcData)) {
+    if (!fs.existsSync(path.join(src, 'config.json')) || !fs.existsSync(path.join(src, 'data'))) {
       throw new Error('לא נמצאו config.json ותיקיית data בתיקייה הזו');
     }
+    if (path.resolve(src, 'data') === path.resolve(path.dirname(paths.state))) throw new Error('זו התיקייה של ההתקנה הנוכחית');
+    return src;
+  }
+
+  importFrom(dir) {
+    const src = this.checkImportSource(dir);
+    const srcData = path.join(src, 'data');
     const dstData = path.dirname(paths.state);
-    if (path.resolve(srcData) === path.resolve(dstData)) throw new Error('זו התיקייה של ההתקנה הנוכחית');
     fs.copyFileSync(path.join(src, 'config.json'), paths.config);
     for (const name of ['wa-auth', 'google-token.json', 'google-credentials.json', 'state.json', 'inbox.json', 'contacts.json']) {
       const from = path.join(srcData, name);
@@ -359,7 +410,8 @@ export class Planner extends EventEmitter {
     const groupJid = wa.groupJid || '';
     const google = { ...this.google, hasClient: Boolean(googleClientFile()), ownClient: fs.existsSync(paths.googleCreds) };
     const claude = { state: this.claude.state, error: this.claude.error, checkedAt: this.claude.checkedAt, busy: this.claude.busy, installing: Boolean(this.claude.installing), installLog: this.claude.installLog };
-    const whatsapp = { status: wa.status || 'connecting', me: wa.me || null };
+    // "linked" survives the short reconnects WhatsApp does every now and then
+    const whatsapp = { status: wa.status || 'connecting', me: wa.me || null, linked: Boolean(wa.everOpened) && !['qr', 'logged_out'].includes(wa.status) };
     const group = { jid: groupJid, name: (groupJid && wa.subjects?.[groupJid]) || this.cfg.groupName || '' };
     const c = this.cfg;
     return {
@@ -375,7 +427,7 @@ export class Planner extends EventEmitter {
       group,
       google,
       claude,
-      setupComplete: whatsapp.status === 'open' && Boolean(groupJid) && google.state === 'ok' && claude.state === 'ok',
+      setupComplete: whatsapp.linked && Boolean(groupJid) && google.state === 'ok' && claude.state === 'ok',
       config: Object.fromEntries(EDITABLE_KEYS.map((k) => [k, c[k]])),
     };
   }
@@ -386,9 +438,13 @@ export class Planner extends EventEmitter {
   }
 
   async stop() {
+    this.stopped = true;
     for (const t of this.crons.splice(0)) t.stop();
+    clearTimeout(this.googleTimer);
+    clearTimeout(this.claudeTimer);
     await this.processor?.flush();
     this.inbox?.save();
     this.googleFlow?.cancel?.();
+    this.wa?.close?.(); // nothing may write data\wa-auth after this (import replaces it)
   }
 }

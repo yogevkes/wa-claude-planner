@@ -408,7 +408,7 @@ const STEPS = [
               } else w?.close();
             },
           }, 'חבר את Google Calendar'),
-          h('p', { class: 'small muted', style: 'margin-top:12px' }, 'קיבלת access_denied? בקש ממי שנתן לך את ההתקנה להוסיף את כתובת ה-Gmail שלך לרשימת הבודקים.'),
+          h('p', { class: 'small muted', style: 'margin-top:12px' }, 'האזהרה של Google צפויה: זו אפליקציה פרטית למשפחה וחברים שלא עברה בדיקה של Google. הגישה היא רק ליומן שלך, והמידע נשאר במחשב הזה.'),
         );
       }
       return h('div', {}, h('h1', {}, 'חיבור ליומן'), h('p', { class: 'lead' }, 'Claude יוסיף, יזיז ויעדכן אירועים ביומן שלך, ויקרא אותו כדי לתכנן.'), box);
@@ -620,6 +620,11 @@ function renderDashboard() {
           h('div', { class: 'k' }, 'גרסה'), h('div', {}, S.version), h('div'),
           h('div', { class: 'k' }, 'תיקיית נתונים'), h('div', { dir: 'ltr', style: 'text-align:right' }, S.dataDir), h('div'),
         ),
+        S.platform === 'win32'
+          ? h('div', { style: 'margin-top:14px' },
+              h('p', { class: 'small muted' }, 'מחשב שאמור לעבוד תמיד? אפשר להפעיל את הבוט כבר בעליית Windows, גם בלי שמישהו נכנס למשתמש (למשל אחרי עדכון Windows). נדרש אישור מנהל.'),
+              h('button', { class: 'btn', type: 'button', onclick: () => act(() => api.post('/api/autostart/boot'), 'אשר את חלון ההרשאות של Windows') }, 'הפעלה גם בלי כניסה ל-Windows'))
+          : null,
         h('div', { class: 'row', style: 'margin-top:14px' },
           h('button', { class: 'btn', type: 'button', onclick: () => { view.mode = 'wizard'; go(0); } }, 'אשף ההגדרה'),
           h('button', { class: 'btn', type: 'button', onclick: () => confirm('להפעיל מחדש את הבוט?') && restart('/api/restart') }, 'הפעלה מחדש'),

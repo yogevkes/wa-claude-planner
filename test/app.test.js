@@ -36,6 +36,7 @@ class FakeWA {
     this.qr = null;
     this.status = 'open';
     this.open = true;
+    this.everOpened = true;
     this.me = { id: '972500000000@s.whatsapp.net', name: 'Yogi' };
   }
   waitOpen() {
@@ -59,9 +60,12 @@ class FakeWA {
       .map(([jid, name]) => ({ jid, name, type: 'group' }));
   }
   async resolveGroup() {}
+  close() {
+    this.closed = true;
+  }
 }
 
-function makePlanner({ googleOk = false, claude = async () => 'OK' } = {}) {
+function makePlanner({ googleOk = false, claude = async () => 'OK', googleError = null } = {}) {
   const cfg = { ...loadConfig(), debounceSec: 30 };
   let authorized = googleOk;
   let release;
@@ -72,6 +76,7 @@ function makePlanner({ googleOk = false, claude = async () => 'OK' } = {}) {
       WhatsApp: FakeWA,
       runClaude: claude,
       makeCalendar: () => {
+        if (googleError) throw googleError;
         if (!authorized) throw new GoogleSetupError('not_authorized', 'Google is not authorized yet');
         return {
           cfg,
@@ -252,4 +257,54 @@ test('tailLog parses pino lines and tolerates junk', () => {
   const lines = tailLog(f, 2);
   assert.equal(lines.length, 2);
   assert.equal(lines[1].err, 'boom');
+});
+
+test('a network error from Google is retried; a missing authorization is not', async () => {
+  const net = makePlanner({ googleError: new Error('getaddrinfo ENOTFOUND oauth2.googleapis.com') });
+  await net.planner.start();
+  assert.equal(net.planner.google.state, 'error');
+  assert.ok(net.planner.googleTimer, 'retry scheduled');
+  await net.planner.stop();
+  const auth = makePlanner();
+  await auth.planner.start();
+  assert.equal(auth.planner.google.state, 'not_authorized');
+  assert.equal(auth.planner.googleTimer, undefined);
+  await auth.planner.stop();
+});
+
+test('setup stays complete during a short WhatsApp reconnect, and real Claude calls heal a failed check', async () => {
+  let fail = true;
+  const { planner } = makePlanner({ googleOk: true, claude: async () => { if (fail) throw new Error('Claude timed out after 120s'); return '{"reply":"ok"}'; } });
+  await planner.start();
+  await new Promise((r) => setTimeout(r, 10));
+  planner.wa.link();
+  planner.updateConfig({ groupJid: 'g1@g.us' });
+  assert.equal(planner.claude.state, 'error');
+  assert.equal(planner.status().setupComplete, false);
+  fail = false;
+  await planner.trackedClaude('x', planner.cfg);
+  assert.equal(planner.claude.state, 'ok');
+  assert.equal(planner.status().setupComplete, true);
+  planner.wa.status = 'closed'; // reconnecting
+  assert.equal(planner.status().setupComplete, true);
+  planner.wa.status = 'qr'; // really unlinked
+  assert.equal(planner.status().setupComplete, false);
+  await planner.stop();
+  assert.equal(planner.wa.closed, true);
+});
+
+test('import from a wrong folder leaves the running bot untouched', async () => {
+  const { planner } = makePlanner({ googleOk: true });
+  await planner.start();
+  const crons = planner.crons.length;
+  const { server, api } = await serve(planner);
+  try {
+    assert.ok(crons > 0);
+    assert.equal((await api('POST', '/api/import', { path: os.tmpdir() })).status, 400);
+    assert.equal(planner.crons.length, crons);
+    assert.equal(planner.stopped, undefined);
+  } finally {
+    server.close();
+    await planner.stop();
+  }
 });

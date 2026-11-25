@@ -121,6 +121,7 @@ export class WhatsApp {
       }
       if (u.connection === 'open') {
         this.open = true;
+        this.everOpened = true;
         this.retry = 0;
         this.qr = null;
         this.me = sock.user ? { id: sock.user.id, name: sock.user.name || sock.user.verifiedName || '' } : null;
@@ -190,6 +191,17 @@ export class WhatsApp {
     this.groupJid = this.cfg.groupJid || '';
     if (fs.existsSync(paths.waAuth)) fs.renameSync(paths.waAuth, `${paths.waAuth}.old-${Date.now()}`);
     await this.connect({ listGroups: this.listMode });
+  }
+
+  /** Close the socket for good (shutdown / before an import replaces data\wa-auth) */
+  close() {
+    this.gen++;
+    this.open = false;
+    try {
+      this.sock?.end?.(undefined);
+    } catch {
+      /* already closed */
+    }
   }
 
   /** Group subjects, refreshed from WhatsApp (needs an open connection) */

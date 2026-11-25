@@ -96,14 +96,19 @@ export function createServer(planner, { port = 3777, exit = (code) => process.ex
       planner.openClaudeLogin();
       return { ok: true };
     },
+    'POST /api/autostart/boot': () => {
+      planner.installBootTask();
+      return { ok: true };
+    },
     'POST /api/test-message': async () => {
       await planner.sendTest();
       return { ok: true };
     },
     'GET /api/logs': (_b, url) => ({ lines: tailLog(path.join(paths.logs, 'app.log'), Math.min(500, Number(url.searchParams.get('lines')) || 150)) }),
     'POST /api/import': async (b) => {
+      const src = planner.checkImportSource(b.path); // a wrong folder must not stop anything
       await planner.stop();
-      planner.importFrom(b.path);
+      planner.importFrom(src);
       later(() => exit(EXIT_RESTART));
       return { ok: true, restarting: true };
     },

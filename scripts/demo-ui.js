@@ -50,6 +50,7 @@ class DemoWA extends WhatsApp {
   linkNow() {
     this.qr = null;
     this.open = true;
+    this.everOpened = true;
     this.me = { id: '972500000000@s.whatsapp.net', name: 'Yogi' };
     this.setStatus('open');
   }

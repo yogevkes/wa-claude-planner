@@ -1,0 +1,107 @@
+name: Build Windows installer
+
+# Every push / PR: tests + an installer artifact to try.
+# A tag like v2.0.0: the same, plus a GitHub Release with WA-Claude-Planner-Setup-2.0.0.exe.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci --no-fund --no-audit
+      - run: npm test
+
+  installer:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Check that the PowerShell scripts parse (Windows PowerShell 5.1, what users have)
+        shell: powershell
+        run: |
+          $bad = 0
+          foreach ($f in Get-ChildItem windows -Filter *.ps1) {
+            $errs = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errs)
+            foreach ($e in $errs) { Write-Host "::error file=windows/$($f.Name),line=$($e.Extent.StartLineNumber)::$($e.Message)"; $bad++ }
+          }
+          if ($bad) { exit 1 }
+          Write-Host 'All scripts parse'
+
+      - name: Assemble the app folder (code + production node_modules + node.exe)
+        shell: pwsh
+        env:
+          GOOGLE_CLIENT_JSON: ${{ secrets.GOOGLE_OAUTH_CLIENT_JSON }}
+        run: |
+          $ver = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $ver = $env:GITHUB_REF_NAME.TrimStart('v') } else { $ver = "$ver-dev.$env:GITHUB_RUN_NUMBER" }
+          "APP_VERSION=$ver" >> $env:GITHUB_ENV
+          $app = 'dist/app'
+          New-Item -ItemType Directory -Force $app, "$app/node" | Out-Null
+          Copy-Item src, scripts, windows, ui, assets -Destination $app -Recurse
+          Copy-Item package.json, package-lock.json, config.example.json, README.md, PRIVACY.md -Destination $app
+          Push-Location $app
+          npm ci --omit=dev --no-fund --no-audit
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Pop-Location
+          Copy-Item (Get-Command node).Source "$app/node/node.exe"
+          Set-Content "$app/install.json" '{"installed": true}' -Encoding ascii
+          if ($env:GOOGLE_CLIENT_JSON) {
+            [IO.File]::WriteAllText((Join-Path $PWD "$app/google-client.json"), $env:GOOGLE_CLIENT_JSON)
+            Write-Host 'Bundled the shared Google OAuth client'
+          } else {
+            Write-Host '::warning::No GOOGLE_OAUTH_CLIENT_JSON secret - users will have to upload their own Google OAuth client'
+          }
+
+      - name: Smoke test the packaged app (bundled node, settings server)
+        shell: pwsh
+        run: |
+          $env:WA_CLAUDE_HOME = Join-Path $env:RUNNER_TEMP 'wa-home'
+          $p = Start-Process dist/app/node/node.exe -ArgumentList 'src\index.js' -WorkingDirectory dist/app -PassThru -NoNewWindow
+          $s = $null
+          for ($i = 0; $i -lt 40 -and -not $s; $i++) { Start-Sleep 1; try { $s = Invoke-RestMethod http://127.0.0.1:3777/api/status } catch {} }
+          $page = try { (Invoke-WebRequest http://127.0.0.1:3777/ -UseBasicParsing).StatusCode } catch { 0 }
+          Stop-Process $p -Force -ErrorAction SilentlyContinue
+          if (-not $s -or $page -ne 200) {
+            Get-Content "$env:WA_CLAUDE_HOME\data\logs\app.log" -ErrorAction SilentlyContinue
+            exit 1
+          }
+          Write-Host "OK: v$($s.version), whatsapp=$($s.whatsapp.status), google=$($s.google.state)"
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc "/DAppVersion=$env:APP_VERSION" installer\wa-claude-planner.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WA-Claude-Planner-Setup-${{ env.APP_VERSION }}
+          path: dist/*.exe
+
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+          generate_release_notes: true
