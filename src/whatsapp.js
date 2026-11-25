@@ -48,8 +48,17 @@ export function extractContent(msg) {
 }
 
 export class WhatsApp {
-  constructor({ cfg, state, log, onMessage, inbox }) {
-    Object.assign(this, { cfg, state, log, onMessage, inbox });
+  /**
+   * @param {object} o
+   * @param {(status: string) => void} [o.onStatus]  'connecting' | 'qr' | 'open' | 'closed' | 'logged_out'
+   * @param {() => void} [o.onLoggedOut]  if set, called instead of exiting the process (the app re-links from the UI)
+   */
+  constructor({ cfg, state, log, onMessage, inbox, onStatus, onLoggedOut }) {
+    Object.assign(this, { cfg, state, log, onMessage, inbox, onStatus, onLoggedOut });
+    this.status = 'connecting';
+    this.qr = null; // latest QR string while waiting to be linked
+    this.me = null; // { id, name } of the linked account
+    this.gen = 0; // bumps on every (re)connect so events of an old socket are ignored
     this.watch = makeWatchMatcher(cfg.watchChats || []);
     this.subjects = {}; // group jid -> subject
     this.lidPn = {}; // lid -> pn and pn -> lid
@@ -68,8 +77,16 @@ export class WhatsApp {
     this.pairingRequested = false;
   }
 
+  setStatus(status) {
+    if (this.status === status) return;
+    this.status = status;
+    this.onStatus?.(status);
+  }
+
   async connect({ listGroups = false } = {}) {
     this.listMode = listGroups;
+    const gen = ++this.gen;
+    this.setStatus('connecting');
     const { state: auth, saveCreds } = await useMultiFileAuthState(paths.waAuth);
     let version;
     try {
@@ -89,19 +106,26 @@ export class WhatsApp {
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (u) => {
+      if (gen !== this.gen) return; // an old socket (after relink/reconnect)
       if (u.qr) {
+        this.qr = u.qr;
+        this.setStatus('qr');
         if (this.cfg.pairingPhone && !this.pairingRequested) {
           this.pairingRequested = true;
           const code = await sock.requestPairingCode(this.cfg.pairingPhone.replace(/\D/g, ''));
           console.log(`\nקוד צימוד: ${code}\nבטלפון: WhatsApp > מכשירים מקושרים > קישור מכשיר > קישור עם מספר טלפון\n`);
-        } else if (!this.cfg.pairingPhone) {
+        } else if (!this.cfg.pairingPhone && process.stdout.isTTY) {
           console.log('\nסרוק עם WhatsApp: הגדרות > מכשירים מקושרים > קישור מכשיר\n');
           qrcode.generate(u.qr, { small: true });
         }
       }
       if (u.connection === 'open') {
         this.open = true;
+        this.everOpened = true;
         this.retry = 0;
+        this.qr = null;
+        this.me = sock.user ? { id: sock.user.id, name: sock.user.name || sock.user.verifiedName || '' } : null;
+        this.setStatus('open');
         this.log.info('WhatsApp connected');
         if (listGroups) return this.printGroups();
         await this.resolveGroup();
@@ -111,12 +135,20 @@ export class WhatsApp {
         this.open = false;
         const code = u.lastDisconnect?.error?.output?.statusCode;
         if (code === DisconnectReason.loggedOut) {
+          this.setStatus('logged_out');
+          if (this.onLoggedOut) {
+            this.log.error('WhatsApp logged out - waiting for a new link from the settings page');
+            return this.onLoggedOut();
+          }
           this.log.error('WhatsApp logged out. Delete data/wa-auth and run start.bat to link again.');
           process.exit(2);
         }
+        this.setStatus('closed');
         const delay = Math.min(60, 2 ** this.retry++) * 1000;
         this.log.warn({ code, delay }, 'WhatsApp disconnected, reconnecting');
-        setTimeout(() => this.connect({ listGroups }).catch((e) => this.log.error({ err: e }, 'reconnect failed')), delay);
+        setTimeout(() => {
+          if (gen === this.gen) this.connect({ listGroups }).catch((e) => this.log.error({ err: e }, 'reconnect failed'));
+        }, delay);
       }
     });
 
@@ -136,6 +168,80 @@ export class WhatsApp {
     sock.ev.on('messages.upsert', ({ messages }) => {
       for (const m of messages) this.handle(m).catch((e) => this.log.error({ err: e }, 'message handling failed'));
     });
+  }
+
+  /** Ask WhatsApp for a pairing code (link with phone number instead of scanning a QR) */
+  async requestPairing(phone) {
+    const digitsOnly = String(phone || '').replace(/\D/g, '');
+    if (digitsOnly.length < 8) throw new Error('phone number looks wrong - use international format, e.g. 972501234567');
+    if (!this.sock || this.status !== 'qr') throw new Error('WhatsApp is not waiting for a link right now');
+    return this.sock.requestPairingCode(digitsOnly);
+  }
+
+  /** Forget the current link (old auth is kept as wa-auth.old-<time>) and start over with a new QR */
+  async relink() {
+    this.gen++; // ignore everything the old socket still emits
+    try {
+      this.sock?.end?.(undefined);
+    } catch {
+      /* already closed */
+    }
+    this.open = false;
+    this.me = null;
+    this.groupJid = this.cfg.groupJid || '';
+    if (fs.existsSync(paths.waAuth)) fs.renameSync(paths.waAuth, `${paths.waAuth}.old-${Date.now()}`);
+    await this.connect({ listGroups: this.listMode });
+  }
+
+  /** Close the socket for good (shutdown / before an import replaces data\wa-auth) */
+  close() {
+    this.gen++;
+    this.open = false;
+    try {
+      this.sock?.end?.(undefined);
+    } catch {
+      /* already closed */
+    }
+  }
+
+  /** Group subjects, refreshed from WhatsApp (needs an open connection) */
+  async refreshGroups() {
+    if (!this.open || !this.sock) return this.subjects;
+    const groups = await this.sock.groupFetchAllParticipating();
+    for (const g of Object.values(groups)) if (g.subject) this.subjects[g.id] = g.subject;
+    return this.subjects;
+  }
+
+  /**
+   * Groups and saved contacts for the chat picker.
+   * @returns {{jid: string, name: string, type: 'group'|'contact', phone?: string}[]}
+   */
+  listChats({ q = '', type = 'all', limit = 50 } = {}) {
+    const needle = normName(q).toLowerCase();
+    const qDigits = String(q).replace(/\D/g, '');
+    const out = [];
+    if (type !== 'contact') {
+      for (const [jid, name] of Object.entries(this.subjects)) out.push({ jid, name, type: 'group' });
+    }
+    if (type !== 'group') {
+      const byName = new Map(); // one entry per contact; prefer the phone-number jid over the lid
+      for (const [jid, name] of Object.entries(this.contacts)) {
+        if (!jid.endsWith('@s.whatsapp.net') && !jid.endsWith('@lid')) continue;
+        const prev = byName.get(name);
+        if (!prev || (jid.endsWith('@s.whatsapp.net') && !prev.jid.endsWith('@s.whatsapp.net'))) byName.set(name, { jid, name });
+      }
+      for (const c of byName.values()) {
+        const pn = c.jid.endsWith('@s.whatsapp.net') ? c.jid : this.lidPn[c.jid];
+        out.push({ ...c, type: 'contact', phone: pn ? pn.split('@')[0].split(':')[0] : undefined });
+      }
+    }
+    const hits = out.filter(
+      (c) => !needle || normName(c.name).toLowerCase().includes(needle) || (qDigits.length >= 3 && (c.phone || '').includes(qDigits)),
+    );
+    // names that start with the query first, then alphabetical (Hebrew-aware)
+    const starts = (c) => (needle && normName(c.name).toLowerCase().startsWith(needle) ? 0 : 1);
+    hits.sort((a, b) => starts(a) - starts(b) || a.name.localeCompare(b.name, 'he'));
+    return hits.slice(0, limit);
   }
 
   async printGroups() {
@@ -230,7 +336,8 @@ export class WhatsApp {
     const groups = await this.sock.groupFetchAllParticipating();
     for (const g of Object.values(groups)) this.subjects[g.id] = g.subject;
     if (this.groupJid) return;
-    const want = this.cfg.groupName.trim();
+    const want = (this.cfg.groupName || '').trim();
+    if (!want) return this.log.info('No group chosen yet - pick one on the settings page');
     const match = Object.values(groups).filter((g) => (g.subject || '').trim() === want);
     if (match.length === 1) {
       this.groupJid = match[0].id;

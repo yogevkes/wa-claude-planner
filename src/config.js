@@ -21,7 +21,17 @@ if (!/^[a-z0-9_-]{1,32}$/i.test(INSTANCE)) {
   throw new Error(`Invalid instance name "${INSTANCE}" - use English letters, digits, - or _`);
 }
 export const IS_DEFAULT = INSTANCE.toLowerCase() === 'default';
-const INSTANCE_DIR = IS_DEFAULT ? ROOT : path.join(ROOT, 'instances', INSTANCE);
+
+/**
+ * Where config + data live. A source checkout keeps them next to the code (ROOT).
+ * The installed app (install.json next to package.json) keeps them in
+ * %LOCALAPPDATA%\WA-Claude Planner, so upgrades/uninstall never touch the user's data.
+ */
+export const INSTALLED = fs.existsSync(path.join(ROOT, 'install.json'));
+export const HOME =
+  process.env.WA_CLAUDE_HOME ||
+  (INSTALLED ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'WA-Claude Planner') : ROOT);
+const INSTANCE_DIR = IS_DEFAULT ? HOME : path.join(HOME, 'instances', INSTANCE);
 
 export const DATA_DIR = process.env.WA_CLAUDE_DATA || path.join(INSTANCE_DIR, 'data');
 
@@ -33,6 +43,8 @@ export const paths = {
   contacts: path.join(DATA_DIR, 'contacts.json'),
   waAuth: path.join(DATA_DIR, 'wa-auth'),
   googleCreds: path.join(DATA_DIR, 'google-credentials.json'),
+  // OAuth client shipped with the installer (shared "family" client), used when the user has none of their own
+  bundledGoogleClient: path.join(ROOT, 'google-client.json'),
   googleToken: path.join(DATA_DIR, 'google-token.json'),
   work: path.join(DATA_DIR, 'work'),
   media: path.join(DATA_DIR, 'work', 'media'),
@@ -63,10 +75,23 @@ export function loadConfig() {
   }
   // The Google OAuth client (not the token) can be shared by every instance
   if (!IS_DEFAULT && !fs.existsSync(paths.googleCreds)) {
-    const shared = path.join(ROOT, 'data', 'google-credentials.json');
+    const shared = path.join(HOME, 'data', 'google-credentials.json');
     if (fs.existsSync(shared)) fs.copyFileSync(shared, paths.googleCreds);
   }
-  // strip a BOM in case the file was saved by Notepad
-  const user = JSON.parse(fs.readFileSync(paths.config, 'utf8').replace(/^\uFEFF/, ''));
-  return { ...defaults, ...user };
+  return { ...defaults, ...readUserConfig() };
+}
+
+/** The user's own config.json (only the keys they set). Strips a BOM in case Notepad saved it. */
+export function readUserConfig() {
+  return JSON.parse(fs.readFileSync(paths.config, 'utf8').replace(/^\uFEFF/, ''));
+}
+
+/** Merge `patch` into config.json (atomic write) and return the new user config */
+export function saveConfigPatch(patch) {
+  const user = fs.existsSync(paths.config) ? readUserConfig() : {};
+  const next = { ...user, ...patch };
+  const tmp = `${paths.config}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(next, null, 2), 'utf8');
+  fs.renameSync(tmp, paths.config);
+  return next;
 }

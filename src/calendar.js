@@ -5,22 +5,45 @@ import { paths } from './config.js';
 export const SCOPES = ['https://www.googleapis.com/auth/calendar'];
 const BOT_TAG = 'waClaude';
 
+/** Thrown with a .code so the app can tell the user what to do */
+export class GoogleSetupError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code; // 'no_client' | 'bad_client' | 'not_authorized'
+  }
+}
+
+/** The user's own OAuth client (data\google-credentials.json) wins over the one shipped with the app */
+export function googleClientFile() {
+  if (fs.existsSync(paths.googleCreds)) return paths.googleCreds;
+  if (fs.existsSync(paths.bundledGoogleClient)) return paths.bundledGoogleClient;
+  return null;
+}
+
+/** Validate an OAuth client JSON (as downloaded from Google Cloud) and return {client_id, client_secret} */
+export function parseOAuthClient(raw) {
+  const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  const c = obj?.installed || obj?.web;
+  if (!c?.client_id || !c?.client_secret) throw new GoogleSetupError('bad_client', 'OAuth client JSON must be of type "Desktop app" (has "installed.client_id").');
+  return c;
+}
+
 export function loadOAuthClient() {
-  if (!fs.existsSync(paths.googleCreds)) {
-    throw new Error(
+  const file = googleClientFile();
+  if (!file) {
+    throw new GoogleSetupError(
+      'no_client',
       `Missing ${paths.googleCreds}. Download the OAuth "Desktop app" client JSON from Google Cloud Console and save it there (see README).`,
     );
   }
-  const raw = JSON.parse(fs.readFileSync(paths.googleCreds, 'utf8'));
-  const c = raw.installed || raw.web;
-  if (!c) throw new Error('google-credentials.json must be an OAuth client of type "Desktop app".');
+  const c = parseOAuthClient(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
   return new google.auth.OAuth2(c.client_id, c.client_secret);
 }
 
 export function getAuthorizedClient() {
   const client = loadOAuthClient();
   if (!fs.existsSync(paths.googleToken)) {
-    throw new Error('Google is not authorized yet. Run: npm run google-auth');
+    throw new GoogleSetupError('not_authorized', 'Google is not authorized yet. Run: npm run google-auth');
   }
   const token = JSON.parse(fs.readFileSync(paths.googleToken, 'utf8'));
   client.setCredentials(token);
