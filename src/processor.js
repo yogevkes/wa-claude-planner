@@ -34,8 +34,8 @@ export class Processor {
    * @param {(text:string)=>Promise<void>} o.send
    * @param {(prompt:string)=>Promise<object>} o.ask  returns normalized decision
    */
-  constructor({ cfg, state, calendar, send, ask, log, inbox }) {
-    Object.assign(this, { cfg, state, calendar, send, ask, log, inbox });
+  constructor({ cfg, state, calendar, send, ask, log, inbox, guard, hostName }) {
+    Object.assign(this, { cfg, state, calendar, send, ask, log, inbox, guard, hostName });
     this.pending = [];
     this.timer = null;
     this.chain = Promise.resolve();
@@ -48,7 +48,9 @@ export class Processor {
 
   /** queue work so batches/briefs never run concurrently */
   run(fn) {
-    this.chain = this.chain.then(fn).catch((e) => this.log?.error({ err: e }, 'queued job failed'));
+    // guard: only the computer that currently owns the bot may answer / touch the calendar
+    const job = async () => (this.guard && !(await this.guard()) ? undefined : fn());
+    this.chain = this.chain.then(job).catch((e) => this.log?.error({ err: e }, 'queued job failed'));
     return this.chain;
   }
 
@@ -207,7 +209,7 @@ export class Processor {
       }
       case 'status':
         return this.reply(
-          `פעיל מאז ${localDateTime(this.startedAt, this.cfg.timezone)}\nמשימות פתוחות: ${this.s.tasks.filter((t) => !t.done).length}\nפעולות שאפשר לבטל: ${this.s.undoStack.length}${this.s.failedBatch ? '\nיש הודעה שנכשלה – /שוב' : ''}`,
+          `פעיל מאז ${localDateTime(this.startedAt, this.cfg.timezone)}${this.hostName ? `\nמחשב: ${this.hostName}` : ''}\nמשימות פתוחות: ${this.s.tasks.filter((t) => !t.done).length}\nפעולות שאפשר לבטל: ${this.s.undoStack.length}${this.s.failedBatch ? '\nיש הודעה שנכשלה – /שוב' : ''}`,
         );
       case 'undo':
         return this.undo();

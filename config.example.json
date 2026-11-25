@@ -4,6 +4,7 @@
   "onlyFromMe": true,
   "botPrefix": "🤖",
   "markUnreadAfterSend": true,
+  "ownerCheckMin": 2,
 
   "timezone": "Asia/Jerusalem",
   "calendarId": "primary",

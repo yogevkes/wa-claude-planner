@@ -48,8 +48,8 @@ export function extractContent(msg) {
 }
 
 export class WhatsApp {
-  constructor({ cfg, state, log, onMessage, inbox }) {
-    Object.assign(this, { cfg, state, log, onMessage, inbox });
+  constructor({ cfg, state, log, onMessage, inbox, onReplaced }) {
+    Object.assign(this, { cfg, state, log, onMessage, inbox, onReplaced });
     this.watch = makeWatchMatcher(cfg.watchChats || []);
     this.subjects = {}; // group jid -> subject
     this.lidPn = {}; // lid -> pn and pn -> lid
@@ -114,6 +114,9 @@ export class WhatsApp {
           this.log.error('WhatsApp logged out. Delete data/wa-auth and run start.bat to link again.');
           process.exit(2);
         }
+        // Another connection took over this WhatsApp link (e.g. the folder was copied to a new computer):
+        // reconnect only if this computer is still the one that should run the bot
+        if (code === DisconnectReason.connectionReplaced && this.onReplaced && !(await this.onReplaced())) return;
         const delay = Math.min(60, 2 ** this.retry++) * 1000;
         this.log.warn({ code, delay }, 'WhatsApp disconnected, reconnecting');
         setTimeout(() => this.connect({ listGroups }).catch((e) => this.log.error({ err: e }, 'reconnect failed')), delay);

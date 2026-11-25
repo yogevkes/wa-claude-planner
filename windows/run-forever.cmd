@@ -1,6 +1,7 @@
 @echo off
 rem Keeps one instance running; restarts it 15s after a crash.  Usage: run-forever.cmd [instance]
 rem Exit code 2 = WhatsApp logged out -> stop and wait for a manual re-link (start.bat).
+rem Exit code 3 = the bot now runs on another computer -> stop (windows\take-over.bat moves it back).
 chcp 65001 >nul
 cd /d "%~dp0.."
 set "INST=%~1"
@@ -15,6 +16,10 @@ echo [%date% %time%] exited with code %CODE% >> "%LOGDIR%\runner.log"
 if "%CODE%"=="2" (
   echo [%date% %time%] WhatsApp logged out - run windows\start.bat %INST% to link again >> "%LOGDIR%\runner.log"
   exit /b 2
+)
+if "%CODE%"=="3" (
+  echo [%date% %time%] The bot now runs on another computer - stopped here. Run windows\take-over.bat %INST% to move it back >> "%LOGDIR%\runner.log"
+  exit /b 3
 )
 rem ping instead of timeout: timeout fails in background (no console) sessions
 ping -n 16 127.0.0.1 >nul

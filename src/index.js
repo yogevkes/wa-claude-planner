@@ -10,8 +10,12 @@ import { Processor } from './processor.js';
 import { WhatsApp } from './whatsapp.js';
 import { localHour } from './time.js';
 import { Inbox } from './inbox.js';
+import { machineIdentity, OwnerLease, OwnershipGuard, takeoverMessage } from './owner.js';
 
 const listGroups = process.argv.includes('--list-groups') || process.argv.includes('--list-chats');
+// --take-over: make this computer the active one, announce it in the group, and exit (windows\take-over.bat)
+const takeOver = process.argv.includes('--take-over');
+const EXIT_RETIRED = 3; // another computer runs the bot now; run-forever.cmd does not restart on this code
 const cfg = loadConfig();
 // Human-readable console + JSON log file
 const LEVELS = { 10: 'TRACE', 20: 'DEBUG', 30: 'INFO', 40: 'WARN', 50: 'ERROR', 60: 'FATAL' };
@@ -51,6 +55,10 @@ for (const f of fs.readdirSync(paths.media)) {
 const inbox = !listGroups && (cfg.watchChats || []).length ? new Inbox(paths.inbox) : null;
 
 let processor;
+let guard;
+let wa;
+let announce = '';
+const machine = machineIdentity();
 if (!listGroups) {
   let calendar;
   try {
@@ -60,19 +68,64 @@ if (!listGroups) {
     log.error(`Google Calendar: ${e.message}`);
     process.exit(1);
   }
+
+  // Only one computer runs the bot: starting it on a new computer stops the old one
+  guard = new OwnershipGuard({
+    lease: new OwnerLease({ api: calendar.api, calendarId: calendar.id, instance: INSTANCE, machine }),
+    state,
+    machine,
+    log,
+    onRetire: () => {
+      inbox?.save();
+      process.exit(EXIT_RETIRED);
+    },
+    onClaim: async (previous) => {
+      const text = takeoverMessage(previous, machine);
+      if (!text) return;
+      if (wa?.open) await wa.send(text).catch((e) => log.warn({ err: e }, 'could not announce the move'));
+      else announce = text;
+    },
+  });
+  await guard.start({ takeOver });
+  if (takeOver && guard.pendingClaim) {
+    log.error('Could not record this computer as the active one (Google Calendar). Check the internet connection and try again.');
+    process.exit(1);
+  }
+
   processor = new Processor({
     cfg,
     state,
     calendar,
     log,
     inbox,
+    guard: () => guard.check(),
+    hostName: machine.host,
     send: (text) => wa.send(text),
     ask: (prompt) => askClaude(prompt, cfg, runClaudeCli, log),
   });
 }
 
-const wa = new WhatsApp({ cfg, state, log, inbox, onMessage: (m) => processor.enqueue(m) });
+wa = new WhatsApp({
+  cfg,
+  state,
+  log,
+  inbox,
+  onMessage: (m) => (takeOver ? undefined : processor.enqueue(m)),
+  onReplaced: guard ? () => guard.check({ force: true }) : undefined,
+});
 await wa.connect({ listGroups });
+
+if (takeOver) {
+  try {
+    await wa.waitOpen();
+    if (announce) await wa.send(announce);
+    log.info(`This computer (${machine.host}) now runs the bot`);
+    process.exit(0);
+  } catch (e) {
+    log.error({ err: e }, 'take-over: WhatsApp did not connect; the bot will still run here once started');
+    process.exit(1);
+  }
+}
 
 if (!listGroups) {
   const tz = cfg.timezone;
@@ -86,6 +139,16 @@ if (!listGroups) {
       .then(() => setTimeout(() => processor.run(() => processor.scan()), 3 * 60000))
       .catch(() => {});
   }
+
+  // Say "the bot moved here" in the group once WhatsApp is up
+  if (announce) {
+    wa.waitOpen(10 * 60000)
+      .then(() => wa.send(announce))
+      .then(() => (announce = ''))
+      .catch((e) => log.warn({ err: e }, 'could not announce the move'));
+  }
+  // Notice quickly when another computer takes over, even with no messages coming in
+  setInterval(() => guard.check(), Math.max(1, cfg.ownerCheckMin ?? 2) * 60000).unref();
 
   // Computer was off/asleep at brief time? send the morning brief late (until lateMorningBriefUntilHour)
   wa.waitOpen(10 * 60000)
@@ -106,5 +169,5 @@ if (!listGroups) {
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
-  log.info(`wa-claude planner started (instance: ${INSTANCE})`);
+  log.info(`wa-claude planner started (instance: ${INSTANCE}, computer: ${machine.host})`);
 }
