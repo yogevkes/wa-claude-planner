@@ -1,15 +1,10 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import pino from 'pino';
-import cron from 'node-cron';
-import { loadConfig, paths, INSTANCE } from './config.js';
+import { loadConfig, paths, INSTANCE, IS_DEFAULT } from './config.js';
 import { State } from './state.js';
-import { Calendar, getAuthorizedClient } from './calendar.js';
-import { askClaude, runClaudeCli } from './claude.js';
-import { Processor } from './processor.js';
 import { WhatsApp } from './whatsapp.js';
-import { localHour } from './time.js';
-import { Inbox } from './inbox.js';
+import { Planner } from './runtime.js';
+import { createServer, listen } from './server.js';
 
 const listGroups = process.argv.includes('--list-groups') || process.argv.includes('--list-chats');
 const cfg = loadConfig();
@@ -35,76 +30,32 @@ const log = pino(
   ]),
 );
 
-const state = new State(paths.state);
-if (!state.d.lastSeenTs) {
-  // First run: don't process old history, only what's written from now on
-  state.d.lastSeenTs = Math.floor(Date.now() / 1000);
-  state.save();
-}
-
-// Clean up downloaded media older than 7 days
-for (const f of fs.readdirSync(paths.media)) {
-  const p = path.join(paths.media, f);
-  if (Date.now() - fs.statSync(p).mtimeMs > 7 * 86400000) fs.rmSync(p, { force: true });
-}
-
-const inbox = !listGroups && (cfg.watchChats || []).length ? new Inbox(paths.inbox) : null;
-
-let processor;
-if (!listGroups) {
-  let calendar;
+if (listGroups) {
+  // Console helper: print groups / contacts / watch-list matches and exit
+  const wa = new WhatsApp({ cfg, state: new State(paths.state), log, inbox: null, onMessage: () => {} });
+  await wa.connect({ listGroups: true });
+} else {
+  const port = Number(process.env.WA_CLAUDE_PORT || cfg.uiPort || (IS_DEFAULT ? 3777 : 0));
+  const planner = new Planner({ cfg, log });
+  const server = createServer(planner, { port });
   try {
-    calendar = new Calendar(getAuthorizedClient(), cfg);
-    await calendar.listWindow(0, 1); // fail fast if auth is broken
+    await listen(server, port);
   } catch (e) {
-    log.error(`Google Calendar: ${e.message}`);
+    log.error(e.message);
     process.exit(1);
   }
-  processor = new Processor({
-    cfg,
-    state,
-    calendar,
-    log,
-    inbox,
-    send: (text) => wa.send(text),
-    ask: (prompt) => askClaude(prompt, cfg, runClaudeCli, log),
-  });
-}
-
-const wa = new WhatsApp({ cfg, state, log, inbox, onMessage: (m) => processor.enqueue(m) });
-await wa.connect({ listGroups });
-
-if (!listGroups) {
-  const tz = cfg.timezone;
-  if (cfg.morningBrief) cron.schedule(cfg.morningBrief, () => processor.run(() => processor.brief('morning')), { timezone: tz, noOverlap: true });
-  if (cfg.eveningBrief) cron.schedule(cfg.eveningBrief, () => processor.run(() => processor.brief('evening')), { timezone: tz, noOverlap: true });
-
-  if (inbox && cfg.scanCron) {
-    cron.schedule(cfg.scanCron, () => processor.run(() => processor.scan()), { timezone: tz, noOverlap: true });
-    // After startup, give WhatsApp a few minutes to deliver messages received while the PC was off, then check
-    wa.waitOpen(10 * 60000)
-      .then(() => setTimeout(() => processor.run(() => processor.scan()), 3 * 60000))
-      .catch(() => {});
-  }
-
-  // Computer was off/asleep at brief time? send the morning brief late (until lateMorningBriefUntilHour)
-  wa.waitOpen(10 * 60000)
-    .then(() => {
-      const morningHour = Number(String(cfg.morningBrief || '').split(/\s+/)[1]);
-      const h = localHour(new Date(), tz);
-      if (Number.isFinite(morningHour) && h >= morningHour && h < (cfg.lateMorningBriefUntilHour ?? 12)) {
-        setTimeout(() => processor.run(() => processor.brief('morning')), 30000);
-      }
-    })
-    .catch(() => {});
+  const url = `http://127.0.0.1:${server.address().port}`;
+  log.info(`settings page: ${url}`);
+  if (process.stdout.isTTY) console.log(`\nהגדרות: ${url}\n`);
+  await planner.start();
 
   const shutdown = async () => {
     log.info('shutting down');
-    await processor.flush();
-    inbox?.save();
+    await planner.stop();
     process.exit(0);
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
-  log.info(`wa-claude planner started (instance: ${INSTANCE})`);
+  process.on('unhandledRejection', (e) => log.error({ err: e }, 'unhandled rejection'));
+  log.info(`instance: ${INSTANCE}`);
 }

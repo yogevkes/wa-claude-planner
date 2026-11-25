@@ -24,11 +24,7 @@
   "eveningBrief": "30 21 * * *",
   "lateMorningBriefUntilHour": 12,
 
-  "watchChats": [
-    "אמא",
-    "המשפחה- קבוצה",
-    { "name": "בן/בת הזוג", "phone": "972500000000" }
-  ],
+  "watchChats": [],
   "scanCron": "0 * * * *",
   "scanQuietHours": [23, 7],
   "scanContextMessages": 10,
