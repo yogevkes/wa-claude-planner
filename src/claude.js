@@ -1,5 +1,26 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { paths } from './config.js';
+
+/**
+ * Which Claude CLI to run. The native installer puts it in ~/.local/bin, which is often
+ * not on PATH (and a scheduled task may not see PATH changes at all), and a config.json
+ * copied from another PC can point at that PC's user folder (C:\Users\<old>\...).
+ * So: a configured path that exists wins; otherwise this user's ~/.local/bin install;
+ * otherwise the configured value as-is (e.g. "claude" found through PATH).
+ */
+export function resolveClaudePath(configured, { home = os.homedir(), platform = process.platform, exists = fs.existsSync } = {}) {
+  const p = String(configured || '').trim() || 'claude';
+  const P = platform === 'win32' ? path.win32 : path.posix;
+  const local = P.join(home, '.local', 'bin', platform === 'win32' ? 'claude.exe' : 'claude');
+  const isPath = /[\\/]/.test(p);
+  if (isPath ? exists(p) : p !== 'claude') return p;
+  return exists(local) ? local : p;
+}
+
+const warnedPaths = new Set();
 
 /**
  * Run Claude Code in print mode. The whole prompt goes through stdin, so no
@@ -7,7 +28,12 @@ import { paths } from './config.js';
  */
 export function runClaudeCli(prompt, cfg, { log } = {}) {
   const isWin = process.platform === 'win32';
-  const cmd = isWin && /\s/.test(cfg.claudePath) ? `"${cfg.claudePath}"` : cfg.claudePath;
+  const exe = resolveClaudePath(cfg.claudePath);
+  if (exe !== cfg.claudePath && !warnedPaths.has(cfg.claudePath)) {
+    warnedPaths.add(cfg.claudePath);
+    log?.warn?.({ claudePath: cfg.claudePath, using: exe }, 'claudePath not found as configured - using this user\'s Claude Code install');
+  }
+  const cmd = isWin && /\s/.test(exe) ? `"${exe}"` : exe;
   const args = [
     '-p',
     '--output-format', 'json',
@@ -39,7 +65,7 @@ export function runClaudeCli(prompt, cfg, { log } = {}) {
     child.stderr.on('data', (d) => (err += d));
     child.on('error', (e) => {
       clearTimeout(timer);
-      reject(new Error(`Could not start Claude CLI (${cfg.claudePath}): ${e.message}`));
+      reject(new Error(`Could not start Claude CLI (${exe}): ${e.message}`));
     });
     child.on('close', (code) => {
       clearTimeout(timer);

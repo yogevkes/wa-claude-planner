@@ -7,7 +7,8 @@ set "TMPDIR=%TEMP%\wa-claude-update"
 if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%"
 mkdir "%TMPDIR%"
 echo Downloading the latest version...
-curl -L -s -o "%TMPDIR%\main.zip" https://github.com/yogevkes/wa-claude-planner/archive/refs/heads/main.zip || (echo Download failed & pause & exit /b 1)
+rem --ssl-no-revoke: some PCs cannot reach the certificate revocation servers (curl error 35)
+curl -L -s -S --fail --ssl-no-revoke -o "%TMPDIR%\main.zip" https://github.com/yogevkes/wa-claude-planner/archive/refs/heads/main.zip || (echo Download failed & pause & exit /b 1)
 tar -xf "%TMPDIR%\main.zip" -C "%TMPDIR%" || (echo Extract failed & pause & exit /b 1)
 robocopy "%TMPDIR%\wa-claude-planner-main" "%ROOT%" /E /XD data instances node_modules .git /XF config.json /NFL /NDL /NJH /NJS /NP
 if %ERRORLEVEL% GEQ 8 (echo Copy failed & pause & exit /b 1)
