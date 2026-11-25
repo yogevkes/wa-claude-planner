@@ -299,6 +299,28 @@ export class WhatsApp {
     this.seen.add(messageId);
     this.state.d.sentIds.push(messageId);
     this.state.save();
-    await this.sock.sendMessage(this.groupJid, { text: `${this.cfg.botPrefix} ${text}` }, { messageId });
+    const sent = await this.sock.sendMessage(this.groupJid, { text: `${this.cfg.botPrefix} ${text}` }, { messageId });
+    if (this.cfg.markUnreadAfterSend !== false) await this.markUnread(sent);
   }
+
+  /**
+   * Mark the group as unread ("סמן כלא נקרא") so the bot's reply stands out in the chat list,
+   * even though it was sent from this (linked) account. Best effort: a failure only logs.
+   */
+  async markUnread(sent) {
+    try {
+      const lastMessages = unreadRange(sent, this.groupJid);
+      await this.sock.chatModify({ markRead: false, lastMessages }, this.groupJid);
+    } catch (e) {
+      this.log.warn({ err: e }, 'could not mark group as unread');
+    }
+  }
+}
+
+/** The lastMessages list chatModify needs to mark a chat unread after sending `sent` (pure; exported for tests) */
+export function unreadRange(sent, jid) {
+  const id = sent?.key?.id;
+  const ts = toNum(sent?.messageTimestamp) || Math.floor(Date.now() / 1000);
+  if (!id) throw new Error('sent message has no id');
+  return [{ key: { remoteJid: sent.key.remoteJid || jid, id, fromMe: true }, messageTimestamp: ts }];
 }

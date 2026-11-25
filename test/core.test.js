@@ -15,7 +15,7 @@ const { buildTimeFields, Calendar, addMinutes } = await import('../src/calendar.
 const claudeMod = await import('../src/claude.js');
 const { extractJson, askClaude, runClaudeCli } = claudeMod;
 const { buildMessagePrompt } = await import('../src/prompts.js');
-const { extractContent } = await import('../src/whatsapp.js');
+const { extractContent, unreadRange } = await import('../src/whatsapp.js');
 const { fmtWhen } = await import('../src/format.js');
 
 const cfg = { ...loadConfig(), debounceSec: 0 };
@@ -473,4 +473,37 @@ test('normDateTime adds seconds and keeps offsets', () => {
   assert.equal(normDateTime('2026-11-23 9:05'), '2026-11-23T09:05:00');
   assert.equal(normDateTime('2026-11-23T10:00:30+02:00'), '2026-11-23T10:00:30+02:00');
   assert.throws(() => normDateTime('מחר'));
+});
+
+test('bot reply marks the group as unread', async () => {
+  const jid = '123@g.us';
+  assert.deepEqual(unreadRange({ key: { remoteJid: jid, id: 'A1', fromMe: true }, messageTimestamp: 1700000000 }, jid), [
+    { key: { remoteJid: jid, id: 'A1', fromMe: true }, messageTimestamp: 1700000000 },
+  ]);
+  assert.throws(() => unreadRange({}, jid));
+
+  const state = new State(path.join(tmp, `wa-${Math.random()}.json`));
+  const calls = [];
+  const log = { info() {}, warn() {}, error() {}, debug() {} };
+  const make = (extra = {}) => {
+    const wa = new WhatsApp({ cfg: { ...cfg, groupJid: jid, ...extra }, state, log });
+    wa.open = true;
+    wa.sock = {
+      sendMessage: async (to, content, opts) => ({ key: { remoteJid: to, id: opts.messageId, fromMe: true }, messageTimestamp: 1700000001 }),
+      chatModify: async (mod, to) => calls.push({ mod, to }),
+    };
+    return wa;
+  };
+  await make().send('שלום');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].to, jid);
+  assert.equal(calls[0].mod.markRead, false);
+  assert.equal(calls[0].mod.lastMessages[0].messageTimestamp, 1700000001);
+
+  await make({ markUnreadAfterSend: false }).send('שלום');
+  assert.equal(calls.length, 1);
+
+  const failing = make();
+  failing.sock.chatModify = async () => { throw new Error('no app state key'); };
+  await failing.send('שלום'); // must not throw
 });

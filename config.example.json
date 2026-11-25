@@ -3,6 +3,7 @@
   "groupJid": "",
   "onlyFromMe": true,
   "botPrefix": "🤖",
+  "markUnreadAfterSend": true,
 
   "timezone": "Asia/Jerusalem",
   "calendarId": "primary",
