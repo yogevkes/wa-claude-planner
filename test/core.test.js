@@ -12,7 +12,8 @@ const { loadConfig, paths } = await import('../src/config.js');
 const { State } = await import('../src/state.js');
 const { Processor } = await import('../src/processor.js');
 const { buildTimeFields, Calendar, addMinutes } = await import('../src/calendar.js');
-const { extractJson, askClaude, runClaudeCli } = await import('../src/claude.js');
+const claudeMod = await import('../src/claude.js');
+const { extractJson, askClaude, runClaudeCli } = claudeMod;
 const { buildMessagePrompt } = await import('../src/prompts.js');
 const { extractContent } = await import('../src/whatsapp.js');
 const { fmtWhen } = await import('../src/format.js');
@@ -270,6 +271,47 @@ process.stdin.on('end',()=>{ const args=process.argv.slice(2).join(' ');
   assert.equal(j.reply, 'קיבלתי: פגישה מחר');
   assert.match(j.args, /-p --output-format json --model sonnet --tools Read/);
   assert.ok(fs.existsSync(paths.work));
+});
+
+test('resolveClaudePath falls back to this user\'s native install', () => {
+  const { resolveClaudePath } = claudeMod;
+  const home = 'D:\\Users\\Nurit';
+  const local = 'D:\\Users\\Nurit\\.local\\bin\\claude.exe';
+  const win = (files) => ({ home, platform: 'win32', exists: (p) => files.includes(p) });
+  // config copied from another PC: that user's folder doesn't exist here
+  assert.equal(resolveClaudePath('C:\\Users\\Yogi\\.local\\bin\\claude.exe', win([local])), local);
+  // configured path that exists is kept
+  assert.equal(resolveClaudePath('C:\\tools\\claude.exe', win(['C:\\tools\\claude.exe', local])), 'C:\\tools\\claude.exe');
+  // default "claude": prefer the native install (often not on PATH), else leave it to PATH
+  assert.equal(resolveClaudePath('claude', win([local])), local);
+  assert.equal(resolveClaudePath('claude', win([])), 'claude');
+  assert.equal(resolveClaudePath('', win([local])), local);
+  // missing everywhere: keep the configured value so the error names it
+  assert.equal(resolveClaudePath('C:\\Users\\Yogi\\.local\\bin\\claude.exe', win([])), 'C:\\Users\\Yogi\\.local\\bin\\claude.exe');
+  // another bare command name is left alone
+  assert.equal(resolveClaudePath('claude.cmd', win([local])), 'claude.cmd');
+  assert.equal(resolveClaudePath('claude', { home: '/home/u', platform: 'linux', exists: (p) => p === '/home/u/.local/bin/claude' }), '/home/u/.local/bin/claude');
+});
+
+test('runClaudeCli uses the fallback when the configured claudePath is missing', async () => {
+  const fake = path.join(tmp, 'fake-claude2.mjs');
+  fs.writeFileSync(fake, `#!/usr/bin/env node\nprocess.stdin.resume();process.stdin.on('end',()=>process.stdout.write(JSON.stringify({is_error:false,result:'ok'})));`);
+  fs.chmodSync(fake, 0o755);
+  const fakeHome = fs.mkdtempSync(path.join(tmp, 'home-'));
+  fs.mkdirSync(path.join(fakeHome, '.local', 'bin'), { recursive: true });
+  fs.copyFileSync(fake, path.join(fakeHome, '.local', 'bin', 'claude'));
+  fs.chmodSync(path.join(fakeHome, '.local', 'bin', 'claude'), 0o755);
+  const oldHome = process.env.HOME;
+  process.env.HOME = fakeHome; // os.homedir() reads HOME on Linux/macOS
+  const warns = [];
+  try {
+    const out = await runClaudeCli('x', { ...cfg, claudePath: '/no/such/dir/claude' }, { log: { warn: (o) => warns.push(o) } });
+    assert.equal(out, 'ok');
+    assert.equal(warns.length, 1);
+    assert.equal(warns[0].using, path.join(fakeHome, '.local', 'bin', 'claude'));
+  } finally {
+    process.env.HOME = oldHome;
+  }
 });
 
 test('prompt includes media instruction and send time', () => {

@@ -83,11 +83,11 @@ npm install
 - לוגים: `data\logs\app.log`
 
 ### העברה למחשב אחר
-1. במחשב החדש מריצים `windows\install-prereqs.bat` (Node.js ו-Claude Code), ומתחברים פעם אחת ל-Claude Code.
+1. במחשב החדש מריצים `windows\install-prereqs.bat` (Node.js ו-Claude Code), ומתחברים פעם אחת ל-Claude Code. אם ההתקנה של Node.js דרך winget נכשלת, הסקריפט מוריד את ההתקנה הרשמית מ-nodejs.org, מאמת אותה ב-SHA256 ושומר לוג מלא ב-`data\logs\node-install.log`.
 2. מעתיקים את כל התיקייה `wa-claude`, **כולל `data` ו-`config.json`**. כך לא צריך QR חדש ולא אישור Google מחדש.
 3. **עוצרים את הבוט במחשב הישן** (`stop.ps1` או סגירת החלון, ואם הותקנה הפעלה אוטומטית גם `uninstall-autostart.ps1`). שני בוטים על אותו חיבור WhatsApp מנתקים זה את זה.
 4. במחשב החדש: `setup.bat`, ואז `install-autostart.bat`.
-5. אם שם המשתמש ב-Windows שונה, מעדכנים את `claudePath` ב-`config.json`. הנתיב מופיע בסוף ההתקנה של Claude Code.
+5. `claudePath` לא צריך עדכון גם אם שם המשתמש ב-Windows שונה: אם הנתיב שב-`config.json` לא קיים במחשב החדש, הבוט משתמש אוטומטית ב-Claude Code של המשתמש הנוכחי (`%USERPROFILE%\.local\bin\claude.exe`) וכותב על כך אזהרה ב-`app.log`.
 
 ## משתמש נוסף (למשל בן/בת הזוג)
 אפשר להריץ על אותו מחשב עוזר נפרד לאדם נוסף. לכל אחד יש WhatsApp, יומן Google, מנוי Claude, קבוצת "עם עצמי", שיחות במעקב וסיכומים משלו. הנתונים של כל משתמש נשמרים בתיקייה `instances\<שם>\`.
@@ -174,7 +174,9 @@ npm run list-chats
 ## תקלות נפוצות
 | בעיה | פתרון |
 |---|---|
-| `Could not start Claude CLI` | מריצים `where claude` ומעתיקים את הנתיב ל-`claudePath` |
+| `Could not start Claude CLI` או `The system cannot find the path specified` | מריצים `where claude` ומעתיקים את הנתיב ל-`claudePath` |
+| `install-prereqs.bat` נכשל בהתקנת Node.js (למשל קוד 1603) | הסקריפט מנסה שוב עם ההתקנה הרשמית. הסיבה המדויקת מופיעה ב-`data\logs\node-install.log` |
+| `curl: (35) ... CRYPT_E_NO_REVOCATION_CHECK` | המחשב לא מצליח להגיע לשרתי בדיקת ביטול התעודות (לרוב בגלל אנטי-וירוס או סינון רשת). הסקריפטים כבר מדלגים על הבדיקה הזו, ושרשרת התעודה עדיין נבדקת |
 | `Google is not authorized` / `invalid_grant` | `npm run google-auth` שוב. ודא שהאפליקציה ב-In production |
 | הבוט לא מגיב | בודקים את `data\logs\app.log`. אם יש `logged out`, מוחקים את `data\wa-auth` ומריצים `windows\start.bat` לסריקה מחדש |
 | הקבוצה לא נמצאה | `npm run list-chats` ומגדירים `groupJid` |
