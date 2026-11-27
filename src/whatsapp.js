@@ -37,7 +37,10 @@ export function extractContent(msg) {
     else if (mime.startsWith('image/')) { out.media = 'document'; out.ext = mime.includes('png') ? 'png' : 'jpg'; }
     else out.note = `קובץ "${name}" מסוג שלא נתמך – רק תמונות ו-PDF`;
     if (name) out.text = `${out.text} [קובץ: ${name}]`.trim();
-  } else if (type === 'audioMessage') out.note = 'הודעה קולית – עדיין לא נתמכת, ענה למשתמש שיכתוב בטקסט';
+  } else if (type === 'audioMessage') {
+    out.note = 'הודעה קולית – עדיין לא נתמכת, ענה למשתמש שיכתוב בטקסט';
+    out.audio = { seconds: Number(c.seconds) || 0, ptt: Boolean(c.ptt), mimetype: c.mimetype || '' };
+  }
   else if (type === 'videoMessage') { out.text = c.caption || ''; out.note = 'סרטון – התוכן עצמו לא נקרא'; }
   else if (type === 'contactMessage') out.text = `[איש קשר: ${c.displayName || ''}] ${c.vcard || ''}`.slice(0, 800);
   else if (type === 'locationMessage') out.text = `[מיקום: ${c.name || ''} ${c.address || ''} ${c.degreesLatitude},${c.degreesLongitude}]`;
@@ -368,16 +371,40 @@ export class WhatsApp {
     if (!c) return;
     if (c.text.trim().startsWith(this.cfg.botPrefix)) return; // our own reply
 
+    // Voice-sample collection mode (for measuring transcription quality): save, confirm, don't send to Claude
+    if (c.audio && this.cfg.voiceSamplesDir) return this.saveVoiceSample(m, c, ts);
+
     const msg = { id, ts, text: c.text.trim(), note: c.note };
     if (c.media) Object.assign(msg, await this.download(m, c));
     this.log.info({ id, ts, text: msg.text.slice(0, 80), media: Boolean(msg.mediaFile) }, 'new message');
     this.onMessage(msg);
   }
 
+  downloadBuffer(m) {
+    return downloadMediaMessage(m, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: this.sock.updateMediaMessage });
+  }
+
+  /** Save a voice note to cfg.voiceSamplesDir (sample collection for the transcription benchmark) */
+  async saveVoiceSample(m, c, ts) {
+    try {
+      const buf = await this.downloadBuffer(m);
+      const ext = /ogg|opus/i.test(c.audio.mimetype) || c.audio.ptt ? 'opus' : (c.audio.mimetype.split('/')[1] || 'audio').split(';')[0];
+      const stamp = new Date(ts * 1000).toISOString().slice(0, 19).replace(/[-:T]/g, '');
+      fs.mkdirSync(this.cfg.voiceSamplesDir, { recursive: true });
+      const name = `voice-${stamp}-${m.key.id.slice(-6)}.${ext}`;
+      fs.writeFileSync(path.join(this.cfg.voiceSamplesDir, name), buf);
+      this.log.info({ name, seconds: c.audio.seconds }, 'voice sample saved');
+      await this.send(`🎤 ההודעה הקולית נשמרה לבדיקת התמלול (${c.audio.seconds} שנ׳, ${name})`);
+    } catch (e) {
+      this.log.warn({ err: e }, 'voice sample save failed');
+      await this.send('לא הצלחתי לשמור את ההודעה הקולית').catch(() => {});
+    }
+  }
+
   /** Save an image/PDF to the work folder so Claude can Read it. Returns {mediaFile} or {note} */
   async download(m, c) {
     try {
-      const buf = await downloadMediaMessage(m, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: this.sock.updateMediaMessage });
+      const buf = await this.downloadBuffer(m);
       if (buf.length > MAX_MEDIA_BYTES) return { note: 'קובץ גדול מדי' };
       const name = `${m.key.id}.${c.ext}`;
       fs.writeFileSync(path.join(paths.media, name), buf);
