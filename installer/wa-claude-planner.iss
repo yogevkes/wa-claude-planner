@@ -40,6 +40,8 @@ he.AutoStart=הפעל אוטומטית כשנכנסים ל-Windows
 en.AutoStart=Start automatically when I sign in to Windows
 he.LaunchApp=פתח את WA-Claude Planner
 en.LaunchApp=Open WA-Claude Planner
+he.StopApp=עצירה מלאה של WA-Claude Planner
+en.StopApp=Stop WA-Claude Planner completely
 
 [Tasks]
 Name: "autostart"; Description: "{cm:AutoStart}"
@@ -55,12 +57,17 @@ Source: "..\dist\app\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs c
 
 [Icons]
 Name: "{userprograms}\{#AppName}"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\windows\start-app.vbs"" -Open"; WorkingDir: "{app}"; IconFilename: "{app}\assets\icon.ico"
+; full stop that also survives a restart (start again with the entry above)
+Name: "{userprograms}\{cm:StopApp}"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\windows\stop-app.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\icon.ico"
 Name: "{userstartup}\{#AppName}"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\windows\start-app.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\icon.ico"; Tasks: autostart
 
 [Run]
 Filename: "{sys}\wscript.exe"; Parameters: """{app}\windows\start-app.vbs"" -Open"; Description: "{cm:LaunchApp}"; Flags: postinstall nowait skipifsilent
 ; silent upgrade (/SILENT): start it again quietly
 Filename: "{sys}\wscript.exe"; Parameters: """{app}\windows\start-app.vbs"""; Flags: nowait; Check: WizardSilent
+
+[UninstallDelete]
+Type: files; Name: "{app}\stopped.flag"
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\windows\stop.ps1"" -All -IncludeTray"; Flags: runhidden; RunOnceId: "StopApp"

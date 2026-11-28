@@ -3,3 +3,4 @@ data/
 config.json
 instances/
 dist/
+stopped.flag
