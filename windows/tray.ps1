@@ -11,6 +11,12 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
 $base = "http://127.0.0.1:$Port"
 
+# A full stop (stop-all.ps1) leaves stopped.flag: launches from Windows startup stay off until the
+# user starts the app explicitly (Start menu / start-bot.bat pass -Open, which clears it)
+$stopFlag = Join-Path $root 'stopped.flag'
+if ($Open) { Remove-Item -LiteralPath $stopFlag -ErrorAction SilentlyContinue }
+elseif (Test-Path -LiteralPath $stopFlag) { exit }
+
 # One tray per instance. A second launch (e.g. from the Start menu) just opens the settings page.
 $created = $false
 $mutex = New-Object System.Threading.Mutex($true, "Local\WA-Claude-Planner-Tray-$Instance", [ref]$created)
@@ -73,6 +79,7 @@ $miPause = $menu.Items.Add('השהה')
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 $miData = $menu.Items.Add('תיקיית הנתונים והלוגים')
 $miRestart = $menu.Items.Add('הפעלה מחדש')
+$miStop = $menu.Items.Add('עצירה מלאה (גם אחרי הפעלה מחדש של המחשב)')
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 $miQuit = $menu.Items.Add('יציאה')
 $script:icon.ContextMenuStrip = $menu
@@ -90,6 +97,16 @@ $miPause.add_Click({
 })
 $miData.add_Click({ if ($script:status) { Start-Process explorer.exe $script:status.dataDir } })
 $miRestart.add_Click({ [void](Invoke-Api 'POST' '/api/restart') })
+$miStop.add_Click({
+  $msg = "לעצור את הבוט לגמרי?`nהוא לא יופעל אוטומטית, גם אחרי הפעלה מחדש של המחשב, עד שתפעיל אותו שוב מתפריט התחל."
+  $ans = [System.Windows.Forms.MessageBox]::Show($msg, 'WA-Claude Planner', 'YesNo', 'Question', 'Button2', 'RightAlign, RtlReading')
+  if ($ans -ne 'Yes') { return }
+  $script:quitting = $true
+  Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -STA -File `"$(Join-Path $here 'stop-all.ps1')`""
+  $script:icon.Visible = $false
+  $script:icon.Dispose()
+  [System.Windows.Forms.Application]::Exit()
+})
 $miQuit.add_Click({
   $script:quitting = $true
   if ($script:owned) {
