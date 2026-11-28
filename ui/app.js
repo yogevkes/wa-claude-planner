@@ -17,7 +17,44 @@ function h(tag, props = {}, ...kids) {
 }
 const $ = (sel, root = document) => root.querySelector(sel);
 
+// ---------------- inline icons (offline, no icon font) ----------------
+const ICONS = {
+  whatsapp: '<path d="M20.5 11.6a8.5 8.5 0 0 1-12.6 7.5L3 20.5l1.4-4.7a8.5 8.5 0 1 1 16.1-4.2Z"/>',
+  calendar: '<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M8 3.5v3M16 3.5v3M3.5 9.5h17"/><path d="M8 13h2M14 13h2M8 16.5h2M14 16.5h2"/>',
+  claude: '<path d="M12 3.5c.6 4.2 2.3 5.9 6.5 6.5-4.2.6-5.9 2.3-6.5 6.5-.6-4.2-2.3-5.9-6.5-6.5 4.2-.6 5.9-2.3 6.5-6.5Z"/><path d="M18 16.5c.2 1.6.9 2.3 2.5 2.5-1.6.2-2.3.9-2.5 2.5-.2-1.6-.9-2.3-2.5-2.5 1.6-.2 2.3-.9 2.5-2.5Z"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 4 4"/>',
+  pause: '<path d="M9 5v14M15 5v14"/>',
+  play: '<path d="M7 4.5v15l12-7.5-12-7.5Z"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  alert: '<path d="M12 4 2.8 20h18.4L12 4Z"/><path d="M12 10v4.5M12 17.5h.01"/>',
+  refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/>',
+};
+function icon(name, cls = '') {
+  return h('span', {
+    class: `ico ${cls}`.trim(),
+    'aria-hidden': 'true',
+    html: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] || ''}</svg>`,
+  });
+}
+const AV_HUES = [162, 200, 222, 268, 318, 22, 38];
+function initials(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  const first = Array.from(parts[0])[0] || '';
+  const last = parts.length > 1 ? Array.from(parts[parts.length - 1])[0] || '' : '';
+  return (first + last).toUpperCase();
+}
+function avatar(name, cls = '') {
+  let hash = 0;
+  for (const ch of String(name || '')) hash = (hash * 31 + (ch.codePointAt(0) || 0)) % 997;
+  return h('span', { class: `avatar ${cls}`.trim(), 'aria-hidden': 'true', style: `--av-h:${AV_HUES[hash % AV_HUES.length]}` }, initials(name));
+}
+
 async function call(method, path, body) {
+  if (clickedBtn) {
+    markBusy(clickedBtn);
+    clickedBtn = null;
+  }
   const res = await fetch(path, {
     method,
     headers: method === 'GET' ? {} : { 'content-type': 'application/json', 'x-wa-planner': '1' },
@@ -30,10 +67,42 @@ async function call(method, path, body) {
 const api = { get: (p) => call('GET', p), post: (p, b) => call('POST', p, b), put: (p, b) => call('PUT', p, b) };
 
 function toast(text, bad = false) {
-  const t = h('div', { class: `toast${bad ? ' bad' : ''}`, role: 'status' }, text);
+  const t = h(
+    'div',
+    { class: `toast ${bad ? 'toast-bad' : 'toast-ok'}`, role: bad ? 'alert' : 'status' },
+    icon(bad ? 'alert' : 'check', 'toast-ico'),
+    h('span', { class: 'toast-text' }, text),
+    h('button', { class: 'toast-close', type: 'button', 'aria-label': 'סגירה', onclick: () => t.remove() }, '✕'),
+  );
   $('#toasts').append(t);
-  setTimeout(() => t.remove(), bad ? 6000 : 3000);
+  setTimeout(() => t.remove(), bad ? 6000 : 3500);
 }
+
+// Spinners: a clicked action button shows a busy state until its request settles.
+const busyBtns = new Set();
+function clearBusy() {
+  for (const el of busyBtns) {
+    el.classList.remove('is-loading');
+    el.removeAttribute('aria-busy');
+    el.disabled = false;
+  }
+  busyBtns.clear();
+}
+function markBusy(el) {
+  if (!el || !el.isConnected || el.disabled || busyBtns.has(el)) return;
+  el.classList.add('is-loading');
+  el.setAttribute('aria-busy', 'true');
+  el.disabled = true;
+  busyBtns.add(el);
+}
+// Remember which action button started a request; call() turns it busy for the duration.
+let clickedBtn = null;
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest?.('button.btn');
+  clickedBtn = btn && (btn.closest('#app') || btn.id === 'pauseBtn') ? btn : null;
+  if (clickedBtn) setTimeout(() => { if (clickedBtn === btn) clickedBtn = null; }, 0);
+}, true);
+
 async function act(fn, okText) {
   try {
     const r = await fn();
@@ -43,6 +112,8 @@ async function act(fn, okText) {
   } catch (e) {
     toast(e.message, true);
     return null;
+  } finally {
+    clearBusy();
   }
 }
 const store = {
@@ -80,20 +151,28 @@ const tone = { open: 'ok', ok: 'ok', qr: 'warn', connecting: 'warn', closed: 'wa
 function renderPills() {
   const pills = $('#pills');
   pills.replaceChildren();
+  const chip = (ico, label, state, text) =>
+    h(
+      'span',
+      { class: `pill ${tone[state] || 'bad'}`, title: `${label}: ${text}`, 'aria-label': `${label}: ${text}` },
+      icon(ico, 'pill-ico'),
+      h('span', { class: 'pill-label' }, label),
+      h('span', { class: 'pill-state' }, text),
+    );
   if (offline) {
-    pills.append(h('span', { class: 'pill bad' }, h('span', { class: 'dot' }), 'השירות לא פעיל'));
+    pills.append(chip('alert', 'השירות', 'bad', 'לא פעיל'));
     return;
   }
   if (!S) return;
-  const pill = (label, state, text) => h('span', { class: `pill ${tone[state] || 'bad'}`, title: label }, h('span', { class: 'dot' }), `${label}: ${text}`);
   pills.append(
-    pill('WhatsApp', S.whatsapp.status, STATE_TEXT.whatsapp[S.whatsapp.status] || S.whatsapp.status),
-    pill('יומן', S.google.state, STATE_TEXT.google[S.google.state] || S.google.state),
-    pill('Claude', S.claude.busy ? 'unknown' : S.claude.state, S.claude.busy ? 'בודק…' : STATE_TEXT.claude[S.claude.state] || S.claude.state),
+    chip('whatsapp', 'WhatsApp', S.whatsapp.status, STATE_TEXT.whatsapp[S.whatsapp.status] || S.whatsapp.status),
+    chip('calendar', 'יומן', S.google.state, STATE_TEXT.google[S.google.state] || S.google.state),
+    chip('claude', 'Claude', S.claude.busy ? 'unknown' : S.claude.state, S.claude.busy ? 'בודק…' : STATE_TEXT.claude[S.claude.state] || S.claude.state),
   );
   const pb = $('#pauseBtn');
   pb.hidden = !S.setupComplete;
-  pb.textContent = S.paused ? '▶ המשך' : '⏸ השהה';
+  pb.replaceChildren(icon(S.paused ? 'play' : 'pause'), h('span', {}, S.paused ? 'המשך' : 'השהה'));
+  pb.setAttribute('aria-pressed', String(S.paused));
   pb.title = S.paused ? 'הבוט מושהה. הודעות נשמרות ויטופלו כשתמשיך' : 'השהיית הבוט';
   pb.onclick = () => act(() => api.post('/api/pause', { paused: !S.paused }), S.paused ? 'הבוט ממשיך לעבוד' : 'הבוט מושהה');
 }
@@ -106,7 +185,7 @@ function renderPills() {
 function chatPicker(o) {
   const input = h('input', { type: 'search', placeholder: o.placeholder, autocomplete: 'off', 'aria-label': o.placeholder });
   const results = h('div', { class: 'picker-results', role: 'listbox', hidden: true });
-  const wrap = h('div', { class: 'picker' }, input, results);
+  const wrap = h('div', { class: 'picker' }, h('div', { class: 'search-field' }, icon('search', 'search-ico'), input), results);
   let items = [];
   let focus = -1;
   let timer;
@@ -132,18 +211,31 @@ function chatPicker(o) {
     results.replaceChildren();
     results.hidden = false;
     if (!items.length) {
-      results.append(h('div', { class: 'empty' }, input.value.trim() ? 'לא נמצא. נסה חלק מהשם, או רענן אם זו קבוצה חדשה.' : 'אין עדיין שיחות להצגה. WhatsApp עוד מסנכרן, נסה שוב בעוד דקה.'));
+      const q = input.value.trim();
+      results.append(
+        h('div', { class: 'picker-empty' }, icon('search'),
+          h('div', { class: 'picker-empty-title' }, q ? 'לא נמצאה התאמה' : 'אין עדיין שיחות להצגה'),
+          h('div', { class: 'small muted' }, q ? 'נסה חלק מהשם. קבוצה חדשה? המתן רגע וחפש שוב.' : 'WhatsApp עוד מסנכרן, נסה שוב בעוד דקה.')),
+      );
       return;
     }
     items.forEach((c, i) => {
       const picked = o.isPicked(c);
+      const meta = c.phone ? `+${c.phone}` : c.type === 'group' ? 'קבוצה' : 'איש קשר';
       results.append(
         h(
           'button',
-          { type: 'button', role: 'option', class: i === focus ? 'focus' : '', 'aria-selected': String(picked), onmousedown: (e) => e.preventDefault(), onclick: () => choose(c) },
-          h('span', { class: 'avatar', 'aria-hidden': 'true' }, c.type === 'group' ? '👥' : '👤'),
-          h('span', {}, h('div', {}, c.name), c.phone ? h('div', { class: 'meta' }, `+${c.phone}`) : c.type === 'group' ? h('div', { class: 'meta' }, 'קבוצה') : null),
-          picked ? h('span', { class: 'picked' }, '✓') : null,
+          {
+            type: 'button',
+            role: 'option',
+            class: `picker-item${i === focus ? ' focus' : ''}${picked ? ' is-picked' : ''}`,
+            'aria-selected': String(picked),
+            onmousedown: (e) => e.preventDefault(),
+            onclick: () => choose(c),
+          },
+          avatar(c.name),
+          h('span', { class: 'picker-item-main' }, h('span', { class: 'picker-item-name' }, c.name), h('span', { class: `picker-item-meta${c.phone ? ' ltr' : ''}` }, meta)),
+          picked ? icon('check', 'picker-item-check') : null,
         ),
       );
     });
@@ -192,11 +284,13 @@ function groupSection() {
         ? h(
             'div',
             { class: 'chosen' },
-            h('span', { style: 'font-size:1.4rem' }, '👥'),
-            h('div', { style: 'flex:1' }, h('div', { class: 'small muted' }, 'הקבוצה שנבחרה'), h('strong', {}, S.group.name || S.group.jid)),
-            h('button', { class: 'btn', type: 'button', onclick: () => act(() => api.post('/api/test-message'), 'נשלחה הודעת בדיקה לקבוצה') }, 'שלח הודעת בדיקה'),
+            avatar(S.group.name || S.group.jid),
+            h('div', { class: 'chosen-main' },
+              h('div', { class: 'chosen-kicker' }, icon('check'), 'הקבוצה שנבחרה'),
+              h('div', { class: 'chosen-name' }, S.group.name || S.group.jid)),
+            h('button', { class: 'btn secondary btn-sm', type: 'button', onclick: () => act(() => api.post('/api/test-message'), 'נשלחה הודעת בדיקה לקבוצה') }, icon('whatsapp'), 'שלח הודעת בדיקה'),
           )
-        : null,
+        : h('p', { class: 'small muted chosen-hint' }, 'לא נבחרה קבוצה עדיין. חפש ובחר את הקבוצה שאיתה תכתוב לעוזר.'),
     );
   };
   draw();
@@ -545,7 +639,14 @@ function renderWizard() {
   setTimeout(updateNav);
   return h('div', { class: 'wizard' },
     h('ol', { class: 'steps card' },
-      ...STEPS.map((s, i) => h('li', { class: `${i === view.step ? 'active' : ''} ${s.done() ? 'done' : ''}`, onclick: () => go(i) },
+      ...STEPS.map((s, i) => h('li', {
+        class: `${i === view.step ? 'active' : ''} ${s.done() ? 'done' : ''}`,
+        role: 'button',
+        tabindex: 0,
+        'aria-current': i === view.step ? 'step' : null,
+        onclick: () => go(i),
+        onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(i); } },
+      },
         h('span', { class: 'num' }, s.done() && i !== view.step ? '✓' : String(i + 1)), h('span', { class: 'label' }, s.label)))),
     h('section', { class: 'card step-body' }, h('div', { class: 'content', id: 'stepContent' }, step.render()), nav),
   );
@@ -585,49 +686,62 @@ function renderDashboard() {
   const g = S.google;
   const c = S.claude;
   const w = S.whatsapp;
-  const line = (k, state, text, ...actions) => [h('div', { class: 'k' }, k), h('div', {}, h('span', { class: `pill ${tone[state] || 'bad'}` }, h('span', { class: 'dot' }), text)), h('div', { class: 'row' }, ...actions)];
+  const badgeIcon = (state) => (state === 'unknown' ? 'refresh' : tone[state] === 'ok' ? 'check' : 'alert');
+  const statusRow = (ico, label, state, text, detail, ...actions) =>
+    h('div', { class: 'status-row' },
+      icon(ico, `status-ico ${tone[state] || 'bad'}`),
+      h('div', { class: 'status-main' },
+        h('div', { class: 'status-title' },
+          h('span', { class: 'status-label' }, label),
+          h('span', { class: `state-badge ${tone[state] || 'bad'}` }, icon(badgeIcon(state)), text)),
+        detail ? h('div', { class: 'status-detail' }, detail) : null),
+      h('div', { class: 'status-action' }, ...actions));
   const logList = h('ul', { class: 'log-list' }, h('li', { class: 'muted' }, 'טוען…'));
   loadLogs(logList);
 
   return h('div', {},
     !S.setupComplete
-      ? h('div', { class: 'banner' }, '⚠️', h('div', { style: 'flex:1' }, 'משהו בהגדרות דורש תשומת לב, והבוט לא יכול לעבוד עד שזה יסודר.'),
-          h('button', { class: 'btn', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => !s.optional && s.id !== 'welcome' && !s.done())); } }, 'לסדר עכשיו'))
+      ? h('div', { class: 'banner' }, icon('alert', 'banner-ico'),
+          h('div', { class: 'banner-text' }, h('strong', {}, 'ההגדרה לא הושלמה. '), 'משהו בהגדרות דורש תשומת לב, והבוט לא יכול לעבוד עד שזה יסודר.'),
+          h('button', { class: 'btn secondary btn-sm', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => !s.optional && s.id !== 'welcome' && !s.done())); } }, 'לסדר עכשיו'))
       : null,
-    S.paused ? h('div', { class: 'banner' }, '⏸', h('div', { style: 'flex:1' }, `הבוט מושהה.${S.queued ? ` ${S.queued} הודעות ממתינות ויטופלו כשתמשיך.` : ''}`)) : null,
+    S.paused
+      ? h('div', { class: 'banner' }, icon('pause', 'banner-ico'),
+          h('div', { class: 'banner-text' }, `הבוט מושהה.${S.queued ? ` ${S.queued} הודעות ממתינות ויטופלו כשתמשיך.` : ''}`))
+      : null,
     h('div', { class: 'grid dash' },
       h('section', { class: 'card' },
-        h('div', { class: 'card-head' }, h('h2', {}, 'מצב')),
-        h('div', { class: 'kv' },
-          ...line('WhatsApp', w.status, `${STATE_TEXT.whatsapp[w.status] || w.status}${w.me?.name ? ` · ${w.me.name}` : ''}`,
-            w.status !== 'open' ? h('button', { class: 'btn', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => s.id === 'whatsapp')); } }, 'קישור') : null),
-          ...line('יומן', g.state, STATE_TEXT.google[g.state] || g.state,
-            h('button', { class: 'btn', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => s.id === 'google')); } }, g.state === 'ok' ? 'חיבור מחדש' : 'חיבור')),
-          ...line('Claude', c.busy ? 'unknown' : c.state, c.busy ? 'בודק…' : STATE_TEXT.claude[c.state] || c.state,
-            h('button', { class: 'btn', type: 'button', disabled: c.busy, onclick: () => act(() => api.post('/api/claude/check'), 'נבדק') }, 'בדיקה'),
-            c.state === 'not_logged_in' || c.state === 'not_installed' ? h('button', { class: 'btn', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => s.id === 'claude')); } }, 'לסדר') : null),
+        h('div', { class: 'card-head' }, h('h2', {}, 'מצב המערכת')),
+        h('div', { class: 'status-list' },
+          statusRow('whatsapp', 'WhatsApp', w.status, STATE_TEXT.whatsapp[w.status] || w.status, w.me?.name ? `חשבון: ${w.me.name}` : '',
+            w.status !== 'open' ? h('button', { class: 'btn secondary btn-sm', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => s.id === 'whatsapp')); } }, 'קישור') : null),
+          statusRow('calendar', 'יומן', g.state, STATE_TEXT.google[g.state] || g.state, g.state === 'ok' ? 'הרשאה פעילה ליומן' : g.state === 'unknown' ? 'בודק את החיבור…' : g.hasClient ? 'נדרשת התחברות' : 'חסר קובץ חיבור',
+            h('button', { class: 'btn secondary btn-sm', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => s.id === 'google')); } }, g.state === 'ok' ? 'חיבור מחדש' : 'חיבור')),
+          statusRow('claude', 'Claude', c.busy ? 'unknown' : c.state, c.busy ? 'בודק…' : STATE_TEXT.claude[c.state] || c.state, c.busy ? 'בודק התקנה והתחברות' : c.state === 'ok' ? 'מנוי Claude Code' : 'נדרשת התקנה או התחברות',
+            h('button', { class: 'btn secondary btn-sm', type: 'button', disabled: c.busy, onclick: () => act(() => api.post('/api/claude/check'), 'נבדק') }, 'בדיקה'),
+            c.state === 'not_logged_in' || c.state === 'not_installed' ? h('button', { class: 'btn secondary btn-sm', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => s.id === 'claude')); } }, 'לסדר') : null),
         ),
       ),
       h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, 'הקבוצה שלי')), S.whatsapp.status === 'open' ? groupSection() : h('p', { class: 'muted' }, `${S.group.name || 'לא נבחרה'} · אפשר לשנות כש-WhatsApp מחובר`)),
       h('section', { class: 'card span-2' }, h('div', { class: 'card-head' }, h('h2', {}, 'שיחות במעקב')), h('p', { class: 'muted small' }, 'הבוט בודק אותן לפי לוח הזמנים בהעדפות ומתריע כשמשהו דורש פעולה.'), watchSection()),
       h('section', { class: 'card span-2' }, h('div', { class: 'card-head' }, h('h2', {}, 'העדפות')), prefsForm()),
       h('section', { class: 'card span-2' },
-        h('div', { class: 'card-head' }, h('h2', {}, 'פעילות אחרונה'), h('button', { class: 'btn ghost', type: 'button', onclick: () => loadLogs(logList) }, 'רענון')),
+        h('div', { class: 'card-head' }, h('h2', {}, 'פעילות אחרונה'), h('button', { class: 'btn ghost btn-sm', type: 'button', onclick: () => loadLogs(logList) }, icon('refresh'), 'רענון')),
         logList),
       h('section', { class: 'card span-2' },
         h('div', { class: 'card-head' }, h('h2', {}, 'מתקדם')),
-        h('div', { class: 'kv' },
-          h('div', { class: 'k' }, 'גרסה'), h('div', {}, S.version), h('div'),
-          h('div', { class: 'k' }, 'תיקיית נתונים'), h('div', { dir: 'ltr', style: 'text-align:right' }, S.dataDir), h('div'),
+        h('div', { class: 'info-list' },
+          h('div', { class: 'info-row' }, h('span', { class: 'info-k' }, 'גרסה'), h('span', { class: 'info-v' }, S.version)),
+          h('div', { class: 'info-row' }, h('span', { class: 'info-k' }, 'תיקיית נתונים'), h('span', { class: 'info-v ltr' }, S.dataDir)),
         ),
         S.platform === 'win32'
-          ? h('div', { style: 'margin-top:14px' },
+          ? h('div', { class: 'advanced-extra' },
               h('p', { class: 'small muted' }, 'מחשב שאמור לעבוד תמיד? אפשר להפעיל את הבוט כבר בעליית Windows, גם בלי שמישהו נכנס למשתמש (למשל אחרי עדכון Windows). נדרש אישור מנהל.'),
-              h('button', { class: 'btn', type: 'button', onclick: () => act(() => api.post('/api/autostart/boot'), 'אשר את חלון ההרשאות של Windows') }, 'הפעלה גם בלי כניסה ל-Windows'))
+              h('button', { class: 'btn secondary', type: 'button', onclick: () => act(() => api.post('/api/autostart/boot'), 'אשר את חלון ההרשאות של Windows') }, 'הפעלה גם בלי כניסה ל-Windows'))
           : null,
-        h('div', { class: 'row', style: 'margin-top:14px' },
-          h('button', { class: 'btn', type: 'button', onclick: () => { view.mode = 'wizard'; go(0); } }, 'אשף ההגדרה'),
-          h('button', { class: 'btn', type: 'button', onclick: () => confirm('להפעיל מחדש את הבוט?') && restart('/api/restart') }, 'הפעלה מחדש'),
+        h('div', { class: 'row advanced-extra' },
+          h('button', { class: 'btn secondary btn-sm', type: 'button', onclick: () => { view.mode = 'wizard'; go(0); } }, 'אשף ההגדרה'),
+          h('button', { class: 'btn secondary btn-sm', type: 'button', onclick: () => confirm('להפעיל מחדש את הבוט?') && restart('/api/restart') }, 'הפעלה מחדש'),
         ),
       ),
     ),
@@ -643,6 +757,8 @@ async function loadLogs(ul) {
     if (!lines.length) ul.replaceChildren(h('li', { class: 'muted' }, 'אין עדיין פעילות.'));
   } catch (e) {
     ul.replaceChildren(h('li', { class: 'muted' }, e.message));
+  } finally {
+    clearBusy();
   }
 }
 
@@ -664,6 +780,8 @@ async function restart(path, body) {
     toast('השירות לא חזר. אם אין סמל במגש, הפעל את WA-Claude Planner מתפריט התחל.', true);
   } catch (e) {
     toast(e.message, true);
+  } finally {
+    clearBusy();
   }
 }
 
