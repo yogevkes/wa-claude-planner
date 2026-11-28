@@ -29,12 +29,38 @@ async function call(method, path, body) {
 }
 const api = { get: (p) => call('GET', p), post: (p, b) => call('POST', p, b), put: (p, b) => call('PUT', p, b) };
 
+const ICON_SEARCH = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>';
+const initialsOf = (name) => {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  const first = [...parts[0]];
+  return parts.length > 1 ? first[0] + [...parts[1]][0] : first.slice(0, 2).join('');
+};
+
+// Presentational only: show a spinner on the button that started an async action.
+let lastClick = { btn: null, at: 0 };
+document.addEventListener('click', (e) => {
+  const btn = e.target instanceof Element ? e.target.closest('button') : null;
+  lastClick = { btn, at: Date.now() };
+}, true);
+const clickedButton = () => (lastClick.btn && lastClick.btn.isConnected && Date.now() - lastClick.at < 1500 ? lastClick.btn : null);
+function setBusy(btn, busy) {
+  if (!btn) return;
+  btn.classList.toggle('is-busy', busy);
+  if (busy) btn.setAttribute('aria-busy', 'true');
+  else btn.removeAttribute('aria-busy');
+}
+
 function toast(text, bad = false) {
-  const t = h('div', { class: `toast${bad ? ' bad' : ''}`, role: 'status' }, text);
+  const t = h('div', { class: `toast ${bad ? 'bad' : 'ok'}`, role: 'status' },
+    h('span', { class: 'toast-ico', 'aria-hidden': 'true' }, bad ? '!' : '✓'),
+    h('span', { class: 'toast-text' }, text));
   $('#toasts').append(t);
-  setTimeout(() => t.remove(), bad ? 6000 : 3000);
+  setTimeout(() => t.remove(), bad ? 6000 : 3200);
 }
 async function act(fn, okText) {
+  const btn = clickedButton();
+  setBusy(btn, true);
   try {
     const r = await fn();
     if (okText) toast(okText);
@@ -43,6 +69,8 @@ async function act(fn, okText) {
   } catch (e) {
     toast(e.message, true);
     return null;
+  } finally {
+    setBusy(btn, false);
   }
 }
 const store = {
@@ -81,11 +109,14 @@ function renderPills() {
   const pills = $('#pills');
   pills.replaceChildren();
   if (offline) {
-    pills.append(h('span', { class: 'pill bad' }, h('span', { class: 'dot' }), 'השירות לא פעיל'));
+    pills.append(h('span', { class: 'pill bad', title: 'השירות לא פעיל' }, h('span', { class: 'dot', 'aria-hidden': 'true' }), h('span', { class: 'pill-label' }, 'השירות לא פעיל')));
     return;
   }
   if (!S) return;
-  const pill = (label, state, text) => h('span', { class: `pill ${tone[state] || 'bad'}`, title: label }, h('span', { class: 'dot' }), `${label}: ${text}`);
+  const pill = (label, state, text) => h('span', { class: `pill ${tone[state] || 'bad'}`, title: `${label}: ${text}` },
+    h('span', { class: 'dot', 'aria-hidden': 'true' }),
+    h('span', { class: 'pill-label' }, label),
+    h('span', { class: 'pill-state' }, text));
   pills.append(
     pill('WhatsApp', S.whatsapp.status, STATE_TEXT.whatsapp[S.whatsapp.status] || S.whatsapp.status),
     pill('יומן', S.google.state, STATE_TEXT.google[S.google.state] || S.google.state),
@@ -106,7 +137,9 @@ function renderPills() {
 function chatPicker(o) {
   const input = h('input', { type: 'search', placeholder: o.placeholder, autocomplete: 'off', 'aria-label': o.placeholder });
   const results = h('div', { class: 'picker-results', role: 'listbox', hidden: true });
-  const wrap = h('div', { class: 'picker' }, input, results);
+  const wrap = h('div', { class: 'picker' },
+    h('div', { class: 'search-field' }, h('span', { class: 'search-ico', html: ICON_SEARCH }), input),
+    results);
   let items = [];
   let focus = -1;
   let timer;
@@ -132,7 +165,9 @@ function chatPicker(o) {
     results.replaceChildren();
     results.hidden = false;
     if (!items.length) {
-      results.append(h('div', { class: 'empty' }, input.value.trim() ? 'לא נמצא. נסה חלק מהשם, או רענן אם זו קבוצה חדשה.' : 'אין עדיין שיחות להצגה. WhatsApp עוד מסנכרן, נסה שוב בעוד דקה.'));
+      results.append(h('div', { class: 'empty' },
+        h('span', { class: 'empty-ico', 'aria-hidden': 'true' }, '🔍'),
+        h('div', {}, input.value.trim() ? 'לא נמצא. נסה חלק מהשם, או רענן אם זו קבוצה חדשה.' : 'אין עדיין שיחות להצגה. WhatsApp עוד מסנכרן, נסה שוב בעוד דקה.')));
       return;
     }
     items.forEach((c, i) => {
@@ -140,10 +175,12 @@ function chatPicker(o) {
       results.append(
         h(
           'button',
-          { type: 'button', role: 'option', class: i === focus ? 'focus' : '', 'aria-selected': String(picked), onmousedown: (e) => e.preventDefault(), onclick: () => choose(c) },
-          h('span', { class: 'avatar', 'aria-hidden': 'true' }, c.type === 'group' ? '👥' : '👤'),
-          h('span', {}, h('div', {}, c.name), c.phone ? h('div', { class: 'meta' }, `+${c.phone}`) : c.type === 'group' ? h('div', { class: 'meta' }, 'קבוצה') : null),
-          picked ? h('span', { class: 'picked' }, '✓') : null,
+          { type: 'button', role: 'option', class: `option${i === focus ? ' focus' : ''}${picked ? ' picked' : ''}`, 'aria-selected': String(picked), onmousedown: (e) => e.preventDefault(), onclick: () => choose(c) },
+          h('span', { class: `avatar ${c.type === 'group' ? 'group' : 'contact'}`, 'aria-hidden': 'true' }, initialsOf(c.name)),
+          h('span', { class: 'option-main' },
+            h('span', { class: 'option-name' }, c.name),
+            c.phone ? h('span', { class: 'meta' }, `+${c.phone}`) : c.type === 'group' ? h('span', { class: 'meta' }, 'קבוצה') : null),
+          picked ? h('span', { class: 'picked', 'aria-hidden': 'true' }, '✓') : null,
         ),
       );
     });
@@ -192,9 +229,9 @@ function groupSection() {
         ? h(
             'div',
             { class: 'chosen' },
-            h('span', { style: 'font-size:1.4rem' }, '👥'),
-            h('div', { style: 'flex:1' }, h('div', { class: 'small muted' }, 'הקבוצה שנבחרה'), h('strong', {}, S.group.name || S.group.jid)),
-            h('button', { class: 'btn', type: 'button', onclick: () => act(() => api.post('/api/test-message'), 'נשלחה הודעת בדיקה לקבוצה') }, 'שלח הודעת בדיקה'),
+            h('span', { class: 'chosen-ico', 'aria-hidden': 'true' }, '👥'),
+            h('div', { class: 'chosen-main' }, h('div', { class: 'small muted' }, 'הקבוצה שנבחרה'), h('strong', { class: 'chosen-name' }, S.group.name || S.group.jid)),
+            h('button', { class: 'btn secondary', type: 'button', onclick: () => act(() => api.post('/api/test-message'), 'נשלחה הודעת בדיקה לקבוצה') }, 'שלח הודעת בדיקה'),
           )
         : null,
     );
@@ -306,7 +343,9 @@ function prefsForm({ onSaved } = {}) {
 }
 
 function statusBox(kind, icon, title, ...body) {
-  return h('div', { class: `status-box ${kind}` }, h('div', { class: 'big', 'aria-hidden': 'true' }, icon), h('div', {}, h('div', { class: 'title' }, title), ...body));
+  return h('div', { class: `status-box${kind ? ` ${kind}` : ''}` },
+    h('div', { class: 'big', 'aria-hidden': 'true' }, icon),
+    h('div', { class: 'status-box-body' }, h('div', { class: 'title' }, title), ...body));
 }
 
 // ---------------- wizard ----------------
@@ -585,27 +624,32 @@ function renderDashboard() {
   const g = S.google;
   const c = S.claude;
   const w = S.whatsapp;
-  const line = (k, state, text, ...actions) => [h('div', { class: 'k' }, k), h('div', {}, h('span', { class: `pill ${tone[state] || 'bad'}` }, h('span', { class: 'dot' }), text)), h('div', { class: 'row' }, ...actions)];
+  const statusItem = (icon, label, state, text, ...actions) => h('li', { class: `status-item ${tone[state] || 'bad'}` },
+    h('span', { class: 'status-ico', 'aria-hidden': 'true' }, icon),
+    h('div', { class: 'status-main' },
+      h('span', { class: 'status-label' }, label),
+      h('span', { class: 'status-state' }, h('span', { class: 'status-dot', 'aria-hidden': 'true' }), h('span', {}, text))),
+    h('div', { class: 'status-actions' }, ...actions));
   const logList = h('ul', { class: 'log-list' }, h('li', { class: 'muted' }, 'טוען…'));
   loadLogs(logList);
 
   return h('div', {},
     !S.setupComplete
-      ? h('div', { class: 'banner' }, '⚠️', h('div', { style: 'flex:1' }, 'משהו בהגדרות דורש תשומת לב, והבוט לא יכול לעבוד עד שזה יסודר.'),
-          h('button', { class: 'btn', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => !s.optional && s.id !== 'welcome' && !s.done())); } }, 'לסדר עכשיו'))
+      ? h('div', { class: 'banner' }, h('span', { class: 'banner-ico', 'aria-hidden': 'true' }, '⚠️'), h('div', { class: 'banner-main' }, 'משהו בהגדרות דורש תשומת לב, והבוט לא יכול לעבוד עד שזה יסודר.'),
+          h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => !s.optional && s.id !== 'welcome' && !s.done())); } }, 'לסדר עכשיו'))
       : null,
-    S.paused ? h('div', { class: 'banner' }, '⏸', h('div', { style: 'flex:1' }, `הבוט מושהה.${S.queued ? ` ${S.queued} הודעות ממתינות ויטופלו כשתמשיך.` : ''}`)) : null,
+    S.paused ? h('div', { class: 'banner' }, h('span', { class: 'banner-ico', 'aria-hidden': 'true' }, '⏸'), h('div', { class: 'banner-main' }, `הבוט מושהה.${S.queued ? ` ${S.queued} הודעות ממתינות ויטופלו כשתמשיך.` : ''}`)) : null,
     h('div', { class: 'grid dash' },
       h('section', { class: 'card' },
         h('div', { class: 'card-head' }, h('h2', {}, 'מצב')),
-        h('div', { class: 'kv' },
-          ...line('WhatsApp', w.status, `${STATE_TEXT.whatsapp[w.status] || w.status}${w.me?.name ? ` · ${w.me.name}` : ''}`,
-            w.status !== 'open' ? h('button', { class: 'btn', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => s.id === 'whatsapp')); } }, 'קישור') : null),
-          ...line('יומן', g.state, STATE_TEXT.google[g.state] || g.state,
-            h('button', { class: 'btn', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => s.id === 'google')); } }, g.state === 'ok' ? 'חיבור מחדש' : 'חיבור')),
-          ...line('Claude', c.busy ? 'unknown' : c.state, c.busy ? 'בודק…' : STATE_TEXT.claude[c.state] || c.state,
-            h('button', { class: 'btn', type: 'button', disabled: c.busy, onclick: () => act(() => api.post('/api/claude/check'), 'נבדק') }, 'בדיקה'),
-            c.state === 'not_logged_in' || c.state === 'not_installed' ? h('button', { class: 'btn', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => s.id === 'claude')); } }, 'לסדר') : null),
+        h('ul', { class: 'status-list' },
+          statusItem('💬', 'WhatsApp', w.status, `${STATE_TEXT.whatsapp[w.status] || w.status}${w.me?.name ? ` · ${w.me.name}` : ''}`,
+            w.status !== 'open' ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => s.id === 'whatsapp')); } }, 'קישור') : null),
+          statusItem('📅', 'יומן', g.state, STATE_TEXT.google[g.state] || g.state,
+            h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => s.id === 'google')); } }, g.state === 'ok' ? 'חיבור מחדש' : 'חיבור')),
+          statusItem('🤖', 'Claude', c.busy ? 'unknown' : c.state, c.busy ? 'בודק…' : STATE_TEXT.claude[c.state] || c.state,
+            h('button', { class: 'btn btn-sm', type: 'button', disabled: c.busy, onclick: () => act(() => api.post('/api/claude/check'), 'נבדק') }, 'בדיקה'),
+            c.state === 'not_logged_in' || c.state === 'not_installed' ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { view.mode = 'wizard'; go(STEPS.findIndex((s) => s.id === 'claude')); } }, 'לסדר') : null),
         ),
       ),
       h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, 'הקבוצה שלי')), S.whatsapp.status === 'open' ? groupSection() : h('p', { class: 'muted' }, `${S.group.name || 'לא נבחרה'} · אפשר לשנות כש-WhatsApp מחובר`)),
@@ -647,6 +691,8 @@ async function loadLogs(ul) {
 }
 
 async function restart(path, body) {
+  const btn = clickedButton();
+  setBusy(btn, true);
   try {
     await api.post(path, body);
     toast('מפעיל מחדש…');
@@ -664,6 +710,8 @@ async function restart(path, body) {
     toast('השירות לא חזר. אם אין סמל במגש, הפעל את WA-Claude Planner מתפריט התחל.', true);
   } catch (e) {
     toast(e.message, true);
+  } finally {
+    setBusy(btn, false);
   }
 }
 

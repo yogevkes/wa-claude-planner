@@ -3,26 +3,32 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>WA-Claude Planner</title>
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header class="top">
-    <div class="brand">
-      <img src="icon.svg" alt="" width="34" height="34">
-      <div>
-        <div class="brand-name">WA-Claude Planner</div>
-        <div class="brand-sub">העוזר האישי שלך ב-WhatsApp</div>
+  <header class="appbar">
+    <div class="appbar-inner">
+      <div class="brand">
+        <img class="brand-logo" src="icon.svg" alt="" width="36" height="36">
+        <span class="brand-text">
+          <span class="brand-name">WA-Claude Planner</span>
+          <span class="brand-sub">העוזר האישי שלך ב-WhatsApp</span>
+        </span>
       </div>
+      <div class="pills" id="pills" aria-label="מצב החיבורים"></div>
+      <button class="btn secondary btn-pause" id="pauseBtn" hidden></button>
     </div>
-    <div class="pills" id="pills"></div>
-    <button class="btn ghost" id="pauseBtn" hidden></button>
   </header>
-  <main id="app" aria-live="polite">
-    <div class="loading">טוען…</div>
+  <main id="app" class="app-main" aria-live="polite">
+    <div class="loading">
+      <span class="spinner" aria-hidden="true"></span>
+      <span>טוען…</span>
+    </div>
   </main>
-  <div class="toasts" id="toasts"></div>
+  <div class="toasts" id="toasts" role="region" aria-label="הודעות מערכת"></div>
   <script src="app.js" type="module"></script>
 </body>
 </html>
