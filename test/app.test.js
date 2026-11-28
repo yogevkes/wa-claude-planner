@@ -308,3 +308,35 @@ test('import from a wrong folder leaves the running bot untouched', async () => 
     await planner.stop();
   }
 });
+
+test('voice-sample mode saves voice notes from the group, confirms, and keeps them away from Claude', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-voice-'));
+  const got = [];
+  const wa = new WhatsApp({
+    cfg: { watchChats: [], groupJid: 'self@g.us', botPrefix: '🤖', voiceSamplesDir: dir, catchUpMaxHours: 72 },
+    state: { d: { processedIds: [], sentIds: [], lastSeenTs: 0 }, save() {} },
+    log: quietLog,
+    onMessage: (m) => got.push(m),
+  });
+  const sent = [];
+  wa.send = async (t) => sent.push(t);
+  wa.downloadBuffer = async () => Buffer.from('OggS-fake-opus');
+  const now = Math.floor(Date.now() / 1000);
+  await wa.handle({
+    key: { id: 'ABCDEF123456', remoteJid: 'self@g.us', fromMe: true },
+    messageTimestamp: now,
+    message: { audioMessage: { seconds: 12, ptt: true, mimetype: 'audio/ogg; codecs=opus' } },
+  });
+  const files = fs.readdirSync(dir);
+  assert.equal(files.length, 1);
+  assert.match(files[0], /^voice-\d{14}-123456\.opus$/);
+  assert.equal(fs.readFileSync(path.join(dir, files[0]), 'utf8'), 'OggS-fake-opus');
+  assert.equal(got.length, 0); // not passed on to Claude
+  assert.match(sent[0], /נשמרה לבדיקת התמלול \(12/);
+
+  // without the setting, a voice note still goes to Claude with the "not supported yet" note
+  wa.cfg.voiceSamplesDir = '';
+  await wa.handle({ key: { id: 'XYZ', remoteJid: 'self@g.us', fromMe: true }, messageTimestamp: now, message: { audioMessage: { seconds: 3, ptt: true, mimetype: 'audio/ogg; codecs=opus' } } });
+  assert.equal(got.length, 1);
+  assert.match(got[0].note, /הודעה קולית/);
+});
